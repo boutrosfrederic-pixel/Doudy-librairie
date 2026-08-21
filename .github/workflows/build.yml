@@ -13,6 +13,11 @@ jobs:
       - uses: gradle/gradle-build-action@v2
         with:
           gradle-version: 8.5
+                - name: DEBUG
+        run: |
+          ls -la
+          cat settings.gradle
+          cat app/build.gradle
       - name: Build APK
         run: gradle assembleDebug
       - name: Upload APK
