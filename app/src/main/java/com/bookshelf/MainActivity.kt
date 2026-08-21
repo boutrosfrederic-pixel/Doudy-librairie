@@ -137,11 +137,19 @@ class MainActivity: ComponentActivity() {
                         confirmButton = {
                             Button(onClick={
                                 scope.launch{
-                                    val book = (editBook ?: Book()).copy(
-                                        title=title.ifBlank{"Sans titre"}, author=author.ifBlank{"Inconnu"},
-                                        category=cat, status=stat,
-                                        totalPages=total.toIntOrNull()?:300, pagesRead=read.toIntOrNull()?:0
-                                    )
+                                    val book = if (editBook != null) {
+    editBook.copy(
+        title=title.ifBlank{"Sans titre"}, author=author.ifBlank{"Inconnu"},
+        category=cat, status=stat,
+        totalPages=total.toIntOrNull()?:300, pagesRead=read.toIntOrNull()?:0
+    )
+} else {
+    Book(
+        title=title.ifBlank{"Sans titre"}, author=author.ifBlank{"Inconnu"},
+        category=cat, status=stat,
+        totalPages=total.toIntOrNull()?:300, pagesRead=read.toIntOrNull()?:0
+    )
+}
                                     if(isEdit) dao.update(book) else dao.insert(book)
                                     showAdd=false; editBook=null
                                 }
