@@ -139,11 +139,20 @@ class MainActivity: ComponentActivity() {
         }
     }
 
-    fun fetchFromOpenLibrary(isbn: String): Pair<String,String>? {
-        return try{
-            val clean = isbn.replace("-","").trim()
-            if(clean.length<10) return null
-            val json = URL("https://openlibrary.org/api/books?bibkeys=ISBN:$clean&format=json&jscmd=data").readText()
-            val obj = JSONObject(json).optJSONObject("ISBN:$clean") ?: return null
+        fun fetchFromOpenLibrary(isbn: String): Pair<String,String>? {
+        return try {
+            val clean = isbn.replace("-", "").trim()
+            if (clean.length < 10) return null
+            val urlStr = "https://openlibrary.org/api/books?bibkeys=ISBN:" + clean + "&format=json&jscmd=data"
+            val json = URL(urlStr).readText()
+            val obj = JSONObject(json).optJSONObject("ISBN:" + clean) ?: return null
+            val title = obj.optString("title", "")
+            val author = obj.optJSONArray("authors")?.optJSONObject(0)?.optString("name", "Inconnu") ?: "Inconnu"
+            Pair(title, author)
+        } catch (e: Exception) {
+            null
+        }
+    }
+}
             val title = obj.optString("title","")
             val author = obj.optJSONArray("authors")?.optJSONObject(0
