@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import androidx.room.Room
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalMaterial3Api::class)
 class MainActivity: ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -27,11 +28,8 @@ class MainActivity: ComponentActivity() {
                 var showAdd by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()
                 
-                // CORRECTION 1 : on collecte le Flow
                 LaunchedEffect(Unit) { 
-                    dao.getAll().collect { list ->
-                        books = list
-                    }
+                    dao.getAll().collect { list -> books = list }
                 }
 
                 Scaffold(
@@ -47,7 +45,8 @@ class MainActivity: ComponentActivity() {
                                     Text(b.title, style=MaterialTheme.typography.titleMedium)
                                     Text("${b.author} • ${b.status} • ${b.category}", style=MaterialTheme.typography.bodySmall)
                                     if(b.totalPages>0){
-                                        LinearProgressIndicator(progress = { b.pagesRead.toFloat()/b.totalPages.toFloat() }, modifier=Modifier.fillMaxWidth().padding(top=6.dp))
+                                        // CORRECTION : progress en Float, pas en lambda {}
+                                        LinearProgressIndicator(progress = b.pagesRead.toFloat()/b.totalPages.toFloat(), modifier=Modifier.fillMaxWidth().padding(top=6.dp))
                                         Text("${b.pagesRead}/${b.totalPages} pages", style=MaterialTheme.typography.labelSmall)
                                     }
                                 }
@@ -71,7 +70,6 @@ class MainActivity: ComponentActivity() {
                             Button(onClick={
                                 scope.launch{
                                     dao.insert(Book(title=title.ifBlank{"Sans titre"}, author=author.ifBlank{"Inconnu"}))
-                                    // CORRECTION 2 : plus besoin de recharger, le Flow va se mettre à jour tout seul
                                     showAdd=false
                                 }
                             }){Text("Ajouter")}
