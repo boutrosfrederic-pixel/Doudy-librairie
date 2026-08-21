@@ -3,7 +3,6 @@ package com.bookshelf
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -28,7 +27,12 @@ class MainActivity: ComponentActivity() {
                 var showAdd by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()
                 
-                LaunchedEffect(Unit) { books = dao.getAll() }
+                // CORRECTION 1 : on collecte le Flow
+                LaunchedEffect(Unit) { 
+                    dao.getAll().collect { list ->
+                        books = list
+                    }
+                }
 
                 Scaffold(
                     topBar = { TopAppBar(title = { Text("Doudy Librairie 📚") }) },
@@ -67,7 +71,7 @@ class MainActivity: ComponentActivity() {
                             Button(onClick={
                                 scope.launch{
                                     dao.insert(Book(title=title.ifBlank{"Sans titre"}, author=author.ifBlank{"Inconnu"}))
-                                    books = dao.getAll()
+                                    // CORRECTION 2 : plus besoin de recharger, le Flow va se mettre à jour tout seul
                                     showAdd=false
                                 }
                             }){Text("Ajouter")}
