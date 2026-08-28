@@ -73,21 +73,20 @@ class MainActivity: AppCompatActivity(){
         db = Room.databaseBuilder(this, AppDatabase::class.java, "doudy-v11").build()
         adapter = BookAdapter(emptyList(),
             onDelete={ b-> AlertDialog.Builder(this).setTitle("Supprimer?").setMessage(b.title)
-               .setPositiveButton("Oui"){_,_-> lifecycleScope.launch{ db.bookDao().delete(b); load() }}.setNegativeButton("Non",null).show()},
+              .setPositiveButton("Oui"){_,_-> lifecycleScope.launch{ db.bookDao().delete(b); load() }}.setNegativeButton("Non",null).show()},
             onEdit={ b-> editDialog(b) }
         )
         findViewById<RecyclerView>(R.id.recycler).layoutManager=LinearLayoutManager(this)
         findViewById<RecyclerView>(R.id.recycler).adapter=adapter
 
         findViewById<Button>(R.id.btnScan).setOnClickListener{
-    scanLauncher.launch(ScanOptions().apply{
-        setDesiredBarcodeFormats(ScanOptions.EAN_13, ScanOptions.EAN_8, ScanOptions.UPC_A)
-        setPrompt("Place le code barre dans le viseur")
-        setBeepEnabled(true)
-        setOrientationLocked(true) // <- portrait forcé
-        setBarcodeImageEnabled(false)
-    })
-}
+            val options = ScanOptions()
+            options.setDesiredBarcodeFormats(ScanOptions.EAN_13, ScanOptions.EAN_8, ScanOptions.UPC_A)
+            options.setPrompt("Place le code dans le cadre")
+            options.setBeepEnabled(true)
+            options.setOrientationLocked(true)
+            options.setBarcodeImageEnabled(false)
+            scanLauncher.launch(options)
         }
         findViewById<Button>(R.id.btnExport).setOnClickListener{ exportCsv() }
         findViewById<EditText>(R.id.search).addTextChangedListener{ t->
@@ -107,7 +106,7 @@ class MainActivity: AppCompatActivity(){
     private fun editDialog(b: Book){
         val edit=EditText(this).apply{ setText(b.title) }
         AlertDialog.Builder(this).setTitle("Editer titre").setView(edit)
-      .setPositiveButton("Sauver"){_,_->
+     .setPositiveButton("Sauver"){_,_->
             lifecycleScope.launch(Dispatchers.IO){ db.bookDao().insert(b.copy(title=edit.text.toString())); withContext(Dispatchers.Main){ load() } }
         }.show()
     }
@@ -136,9 +135,7 @@ class MainActivity: AppCompatActivity(){
                     }
                 }catch(_:Exception){}
             }
-            // Cas spécial pour toi : 9791028128623
-            if(isbn=="9791028128623" &&!found){ title="Projet dernière chance"; author="Andy Weir"; cover=""; found=true }
-
+            if(isbn=="9791028128623" &&!found){ title="Projet dernière chance"; author="Andy Weir"; found=true }
             val book=Book(isbn=isbn, title=title, author=author, cover=cover.replace("http://","https://"))
             db.bookDao().insert(book)
             withContext(Dispatchers.Main){
@@ -160,8 +157,8 @@ class MainActivity: AppCompatActivity(){
                     val f=java.io.File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),"doudy_librairie.csv")
                     f.writeText(csv)
                 }
-                withContext(Dispatchers.Main){ Toast.makeText(this@MainActivity,"CSV exporté dans Téléchargements",Toast.LENGTH_LONG).show() }
-            }catch(e:Exception){ withContext(Dispatchers.Main){ Toast.makeText(this@MainActivity,"Erreur export: ${e.message}",Toast.LENGTH_LONG).show() } }
+                withContext(Dispatchers.Main){ Toast.makeText(this@MainActivity,"CSV exporté",Toast.LENGTH_LONG).show() }
+            }catch(e:Exception){ withContext(Dispatchers.Main){ Toast.makeText(this@MainActivity,"Erreur: ${e.message}",Toast.LENGTH_LONG).show() } }
         }
     }
 }
