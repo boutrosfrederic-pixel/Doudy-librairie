@@ -18,7 +18,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.URL
 
-// --- DB ---
 @Entity
 data class Book(@PrimaryKey val isbn: String, val title: String, val author: String = "", val dateAdded: Long = System.currentTimeMillis())
 
@@ -35,33 +34,33 @@ interface BookDao {
 @Database(entities = [Book::class], version = 1)
 abstract class AppDatabase : RoomDatabase() { abstract fun bookDao(): BookDao }
 
-// --- Adapter avec suppression ---
 class BookAdapter(var books: List<Book>, val onDelete: (Book)->Unit) : RecyclerView.Adapter<BookAdapter.VH>() {
     class VH(val tv: TextView): RecyclerView.ViewHolder(tv)
     override fun onCreateViewHolder(p: android.view.ViewGroup, vt: Int): VH {
         val tv = TextView(p.context).apply {
-            setPadding(32,24,32,24); textSize = 16f
+            setPadding(32,40,32,40); textSize = 17f
+            layoutParams = RecyclerView.LayoutParams(RecyclerView.LayoutParams.MATCH_PARENT, RecyclerView.LayoutParams.WRAP_CONTENT)
         }
         return VH(tv)
     }
     override fun getItemCount() = books.size
     override fun onBindViewHolder(h: VH, pos: Int) {
         val b = books[pos]
-        h.tv.text = "📚 ${b.title}\n${b.author} - ${b.isbn}"
-        h.tv.setOnLongClickListener {
-            onDelete(b); true
-        }
+        val txt = if(b.author.isNotEmpty()) "${b.title}\n${b.author}\nISBN: ${b.isbn}" else "${b.title}\nISBN: ${b.isbn}"
+        h.tv.text = "📚 $txt"
+        h.tv.setOnLongClickListener { onDelete(b); true }
     }
 }
 
 class MainActivity : AppCompatActivity() {
     private lateinit var db: AppDatabase
     private lateinit var adapter: BookAdapter
+    private lateinit var titleView: TextView
 
     private val barcodeLauncher = registerForActivityResult(ScanContract()) { result ->
         if (result.contents!= null) {
             val isbn = result.contents
-            Toast.makeText(this, "Recherche $isbn...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "ISBN: $isbn", Toast.LENGTH_SHORT).show()
             fetchAndSave(isbn)
         }
     }
@@ -70,15 +69,12 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        db = Room.databaseBuilder(this, AppDatabase::class.java, "doudy-db-v9").build()
-        adapter = BookAdapter(emptyList()) { bookToDelete ->
-            AlertDialog.Builder(this).setTitle("Supprimer ${bookToDelete.title}?")
-               .setPositiveButton("Oui") { _, _ ->
-                    lifecycleScope.launch {
-                        db.bookDao().delete(bookToDelete)
-                        loadBooks()
-                    }
-                }.setNegativeButton("Non", null).show()
+        titleView = findViewById(R.id.title)
+        db = Room.databaseBuilder(this, AppDatabase::class.java, "doudy-db-v9-1").build()
+        adapter = BookAdapter(emptyList()) { book ->
+            AlertDialog.Builder(this).setTitle("Supprimer?").setMessage(book.title)
+              .setPositiveButton("Oui") { _, _ -> lifecycleScope.launch { db.bookDao().delete(book); loadBooks() } }
+              .setNegativeButton("Non", null).show()
         }
 
         findViewById<RecyclerView>(R.id.recycler).apply {
@@ -88,9 +84,10 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnScan).setOnClickListener {
             barcodeLauncher.launch(ScanOptions().apply {
-                setDesiredBarcodeFormats(ScanOptions.EAN_13)
-                setPrompt("Scanne le code barre du livre")
+                setDesiredBarcodeFormats(ScanOptions.EAN_13, ScanOptions.EAN_8, ScanOptions.UPC_A)
+                setPrompt("Scanne")
                 setBeepEnabled(true)
+                setOrientationLocked(false)
             })
         }
         loadBooks()
@@ -98,10 +95,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadBooks() {
         lifecycleScope.launch {
-            val list = db.bookDao().getAll()
+            val list = withContext(Dispatchers.IO) { db.bookDao().getAll() }
             adapter.books = list
             adapter.notifyDataSetChanged()
-            findViewById<TextView>(R.id.title).text = "Ma Librairie Doudy - ${list.size} livres (appui long pour supprimer)"
+            titleView.text = if(list.isEmpty()) "Aucun livre - Scanne!" else "Ma Librairie - ${list.size} livres (long clic = suppr)"
         }
     }
 
@@ -112,20 +109,17 @@ class MainActivity : AppCompatActivity() {
             try {
                 val jsonStr = URL("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn").readText()
                 val json = JSONObject(jsonStr)
-                if (json.getInt("totalItems") > 0) {
+                if (json.optInt("totalItems",0) > 0) {
                     val volumeInfo = json.getJSONArray("items").getJSONObject(0).getJSONObject("volumeInfo")
                     title = volumeInfo.optString("title", title)
                     val authors = volumeInfo.optJSONArray("authors")
-                    if (authors!= null) author = authors.getString(0)
+                    if (authors!=null && authors.length()>0) author = authors.getString(0)
                 }
-            } catch (e: Exception) { e.printStackTrace() }
-
-            val book = Book(isbn = isbn, title = title, author = author)
-            db.bookDao().insert(book)
-            withContext(Dispatchers.Main) {
-                Toast.makeText(this@MainActivity, "Ajouté: $title", Toast.LENGTH_LONG).show()
-                loadBooks()
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "Hors ligne, ajout ISBN seul", Toast.LENGTH_SHORT).show() }
             }
+            db.bookDao().insert(Book(isbn = isbn, title = title, author = author))
+            withContext(Dispatchers.Main) { loadBooks() }
         }
     }
 }
