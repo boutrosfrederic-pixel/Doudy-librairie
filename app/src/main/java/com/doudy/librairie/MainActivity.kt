@@ -80,7 +80,14 @@ class MainActivity: AppCompatActivity(){
         findViewById<RecyclerView>(R.id.recycler).adapter=adapter
 
         findViewById<Button>(R.id.btnScan).setOnClickListener{
-            scanLauncher.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.EAN_13).setPrompt("Scan").setBeepEnabled(true).setOrientationLocked(false))
+    scanLauncher.launch(ScanOptions().apply{
+        setDesiredBarcodeFormats(ScanOptions.EAN_13, ScanOptions.EAN_8, ScanOptions.UPC_A)
+        setPrompt("Place le code barre dans le viseur")
+        setBeepEnabled(true)
+        setOrientationLocked(true) // <- portrait forcé
+        setBarcodeImageEnabled(false)
+    })
+}
         }
         findViewById<Button>(R.id.btnExport).setOnClickListener{ exportCsv() }
         findViewById<EditText>(R.id.search).addTextChangedListener{ t->
