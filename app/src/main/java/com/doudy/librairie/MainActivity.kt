@@ -54,7 +54,7 @@ import java.io.InputStreamReader
 import java.net.URL
 
 // ==========================================
-// 1. BASE DE DONNÉES ROOM (Mise à jour avec la colonne Series)
+// 1. BASE DE DONNÉES ROOM
 // ==========================================
 
 @Entity
@@ -112,7 +112,7 @@ class MainActivity : ComponentActivity() {
 }
 
 // ==========================================
-// 3. ÉCRAN ET COMPOSABLES UI AVEC GROUPEMENT
+// 3. ÉCRAN ET COMPOSABLES UI
 // ==========================================
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -160,109 +160,112 @@ fun MainScreen(dao: BookDao) {
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("Doudy Librairie", fontWeight = FontWeight.Bold)
-                        Text("${books.size} livre(s)", style = MaterialTheme.typography.labelMedium, color = Color.Gray)
-                    }
-                },
-                actions = {
-                    Box {
-                        IconButton(onClick = { showMenu = true }) {
-                            Icon(Icons.Filled.MoreVert, contentDescription = "Menu")
-                        }
-                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("📥 Importer un fichier CSV") },
-                                onClick = {
-                                    showMenu = false
-                                    importLauncher.launch("*/*")
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("📤 Exporter ma bibliothèque") },
-                                onClick = {
-                                    showMenu = false
-                                    if (books.isNotEmpty()) exportLauncher.launch("ma_bibliotheque.csv")
-                                    else Toast.makeText(context, "Bibliothèque vide", Toast.LENGTH_SHORT).show()
-                                }
-                            )
-                        }
-                    }
-                }
-            )
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                text = { Text("Scanner un livre") },
-                icon = { Icon(Icons.Filled.Add, null) },
-                onClick = {
-                    if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                        showScan = true
-                    } else {
-                        activity.requestPermissions(arrayOf(android.Manifest.permission.CAMERA), 101)
-                    }
-                }
-            )
-        }
-    ) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad)) {
-            
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                placeholder = { Text("Rechercher un titre, série, auteur...") },
-                leadingIcon = { Icon(Icons.Filled.Search, null) },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp)
-            )
-
-            if (groupedBooks.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Aucun livre trouvé", color = Color.Gray)
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    groupedBooks.forEach { (seriesName, seriesBooks) ->
-                        item {
-                            SeriesSection(
-                                seriesName = seriesName,
-                                books = seriesBooks,
-                                onDeleteBook = { book -> scope.launch { dao.deleteBook(book) } }
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (showScan) {
-                CameraView(
-                    onScanned = { isbn ->
-                        val clean = isbn.filter { it.isDigit() || it == 'X' || it == 'x' }
-                        if (clean.length >= 10) {
-                            scope.launch {
-                                val book = fetchBookInfo(clean)
-                                dao.insertBook(book)
-                                Toast.makeText(context, "Ajouté : ${book.title}", Toast.LENGTH_SHORT).show()
-                            }
+    Box(Modifier.fillMaxSize()) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text("Doudy Librairie", fontWeight = FontWeight.Bold)
+                            Text("${books.size} livre(s)", style = MaterialTheme.typography.labelMedium, color = Color.Gray)
                         }
                     },
-                    onClose = { showScan = false }
+                    actions = {
+                        Box {
+                            IconButton(onClick = { showMenu = true }) {
+                                Icon(Icons.Filled.MoreVert, contentDescription = "Menu")
+                            }
+                            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("📥 Importer un fichier CSV") },
+                                    onClick = {
+                                        showMenu = false
+                                        importLauncher.launch("*/*")
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("📤 Exporter ma bibliothèque") },
+                                    onClick = {
+                                        showMenu = false
+                                        if (books.isNotEmpty()) exportLauncher.launch("ma_bibliotheque.csv")
+                                        else Toast.makeText(context, "Bibliothèque vide", Toast.LENGTH_SHORT).show()
+                                    }
+                                )
+                            }
+                        }
+                    }
+                )
+            },
+            floatingActionButton = {
+                ExtendedFloatingActionButton(
+                    text = { Text("Scanner un livre") },
+                    icon = { Icon(Icons.Filled.Add, null) },
+                    onClick = {
+                        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                            showScan = true
+                        } else {
+                            activity.requestPermissions(arrayOf(android.Manifest.permission.CAMERA), 101)
+                        }
+                    }
                 )
             }
+        ) { pad ->
+            Column(Modifier.fillMaxSize().padding(pad)) {
+                
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    placeholder = { Text("Rechercher un titre, série, auteur...") },
+                    leadingIcon = { Icon(Icons.Filled.Search, null) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                if (groupedBooks.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("Aucun livre trouvé", color = Color.Gray)
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        groupedBooks.forEach { (seriesName, seriesBooks) ->
+                            item {
+                                SeriesSection(
+                                    seriesName = seriesName,
+                                    books = seriesBooks,
+                                    onDeleteBook = { book -> scope.launch { dao.deleteBook(book) } }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Overlay Caméra plein écran
+        if (showScan) {
+            CameraView(
+                onScanned = { isbn ->
+                    val clean = isbn.filter { it.isDigit() || it == 'X' || it == 'x' }
+                    if (clean.length >= 10) {
+                        scope.launch {
+                            val book = fetchBookInfo(clean)
+                            dao.insertBook(book)
+                            Toast.makeText(context, "Ajouté : ${book.title}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+                onClose = { showScan = false }
+            )
         }
     }
 }
 
 // ==========================================
-// 4. GROUPE SÉRIE ACCORDÉON
+// 4. AFFICHAGE ET GROUPEMENT DES SÉRIES
 // ==========================================
 
 @Composable
@@ -365,7 +368,7 @@ fun BookItemCard(book: Book, onDelete: () -> Unit) {
 }
 
 // ==========================================
-// 5. IMPORT/EXPORT CSV COMPATIBLE BOOKSHELF
+// 5. PARSER ET EXPORT CSV (Virgules & Points-virgules)
 // ==========================================
 
 suspend fun importBooksFromCsv(context: android.content.Context, uri: Uri, dao: BookDao): Int = withContext(Dispatchers.IO) {
@@ -396,7 +399,6 @@ suspend fun importBooksFromCsv(context: android.content.Context, uri: Uri, dao: 
                             val authors = if (authorsIdx != -1 && authorsIdx < tokens.size && tokens[authorsIdx].isNotBlank()) tokens[authorsIdx] else "Auteur inconnu"
                             val explicitSeries = if (seriesIdx != -1 && seriesIdx < tokens.size) tokens[seriesIdx] else ""
                             
-                            // Image automatique OpenLibrary par défaut si la case cover est vide
                             val coverUrl = if (coverIdx != -1 && coverIdx < tokens.size && tokens[coverIdx].isNotBlank()) {
                                 tokens[coverIdx]
                             } else {
@@ -475,7 +477,7 @@ suspend fun exportBooksToCsv(context: android.content.Context, uri: Uri, books: 
 }
 
 // ==========================================
-// 6. LOGIQUE RECHERCHE MULTI-API (Google + OpenLibrary)
+// 6. RECHERCHE EN LIGNE INFOS & IMAGE
 // ==========================================
 
 suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
@@ -484,7 +486,6 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
     var cover = "https://covers.openlibrary.org/b/isbn/$isbn-M.jpg"
     var series = ""
 
-    // 1er essai : Google Books API
     try {
         val jsonStr = URL("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn").readText()
         val json = JSONObject(jsonStr)
@@ -504,7 +505,6 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
         }
     } catch (e: Exception) {}
 
-    // 2ème essai de secours pour l'image et la série : OpenLibrary
     try {
         val jsonStr = URL("https://openlibrary.org/api/books?bibkeys=ISBN:$isbn&jscmd=data&format=json").readText()
         val json = JSONObject(jsonStr)
@@ -526,7 +526,7 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
 }
 
 // ==========================================
-// 7. COMPOSABLE CAMÉRA DE SCAN
+// 7. MODULE SCANNER CAMÉRA
 // ==========================================
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -540,7 +540,11 @@ fun CameraView(onScanned: (String) -> Unit, onClose: () -> Unit) {
     var isProcessingScan by remember { mutableStateOf(false) }
     var lastScannedCode by remember { mutableStateOf("") }
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
         AndroidView(
             factory = { ctx ->
                 val previewView = PreviewView(ctx).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
@@ -601,7 +605,7 @@ fun CameraView(onScanned: (String) -> Unit, onClose: () -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
-                .background(Color.Black.copy(alpha = 0.7f))
+                .background(Color.Black.copy(alpha = 0.75f))
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -613,14 +617,20 @@ fun CameraView(onScanned: (String) -> Unit, onClose: () -> Unit) {
                 Text(
                     text = if (isContinuousMode) "Mode : Scan Continu" else "Mode : Scan Unique",
                     color = Color.White,
-                    style = MaterialTheme.typography.titleMedium
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
                 )
-                Button(onClick = onClose) { Text("Fermer") }
+                Button(
+                    onClick = onClose,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { 
+                    Text("Fermer") 
+                }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 FilterChip(
                     selected = !isContinuousMode,
                     onClick = { isContinuousMode = false; lastScannedCode = "" },
