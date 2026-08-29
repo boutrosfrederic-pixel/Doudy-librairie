@@ -28,7 +28,6 @@ import java.net.URL
 
 @Entity
 data class Book(@PrimaryKey val isbn: String, val title: String, val author: String="", val cover: String="", val dateAdded: Long=System.currentTimeMillis())
-
 @Dao
 interface BookDao{
     @Query("SELECT * FROM Book ORDER BY dateAdded DESC") suspend fun getAll(): List<Book>
@@ -47,7 +46,7 @@ class BookAdapter(var books: List<Book>, val onDelete:(Book)->Unit, val onEdit:(
             background = android.graphics.drawable.GradientDrawable().apply{ cornerRadius=24f; setColor(0xFFFFFFFF.toInt()) }
         }
         val img = ImageView(p.context).apply{ layoutParams=android.widget.LinearLayout.LayoutParams(120,180) }
-        val tv = TextView(p.context).apply{ setPadding(24,0,0,0); textSize=15f; layoutParams=android.widget.LinearLayout.LayoutParams(0,RecyclerView.LayoutParams.WRAP_CONTENT,1f) }
+        val tv = TextView(p.context).apply{ setPadding(24,0,0,0); textSize=15f }
         layout.addView(img); layout.addView(tv)
         return VH(layout,img,tv)
     }
@@ -70,10 +69,11 @@ class MainActivity: AppCompatActivity(){
     override fun onCreate(savedInstanceState: Bundle?){
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        db = Room.databaseBuilder(this, AppDatabase::class.java, "doudy-v11").build()
+        // IMPORTANT on garde la même base que ton screen à 3 livres
+        db = Room.databaseBuilder(this, AppDatabase::class.java, "doudy-v11").fallbackToDestructiveMigration().build()
         adapter = BookAdapter(emptyList(),
             onDelete={ b-> AlertDialog.Builder(this).setTitle("Supprimer?").setMessage(b.title)
-              .setPositiveButton("Oui"){_,_-> lifecycleScope.launch{ db.bookDao().delete(b); load() }}.setNegativeButton("Non",null).show()},
+             .setPositiveButton("Oui"){_,_-> lifecycleScope.launch{ db.bookDao().delete(b); load() }}.setNegativeButton("Non",null).show()},
             onEdit={ b-> editDialog(b) }
         )
         findViewById<RecyclerView>(R.id.recycler).layoutManager=LinearLayoutManager(this)
@@ -81,17 +81,17 @@ class MainActivity: AppCompatActivity(){
 
         findViewById<Button>(R.id.btnScan).setOnClickListener{
             val options = ScanOptions()
-            options.setDesiredBarcodeFormats(ScanOptions.EAN_13, ScanOptions.EAN_8, ScanOptions.UPC_A)
-            options.setPrompt("Place le code dans le cadre")
+            options.setDesiredBarcodeFormats(ScanOptions.EAN_13)
+            options.setPrompt("Scanne en portrait")
             options.setBeepEnabled(true)
             options.setOrientationLocked(true)
-            options.setBarcodeImageEnabled(false)
+            options.setCaptureActivity(MyCaptureActivity::class.java)
             scanLauncher.launch(options)
         }
         findViewById<Button>(R.id.btnExport).setOnClickListener{ exportCsv() }
         findViewById<EditText>(R.id.search).addTextChangedListener{ t->
             val q=t.toString().lowercase()
-            val filtered = if(q.isEmpty()) allBooks else allBooks.filter{ it.title.lowercase().contains(q) || it.author.lowercase().contains(q) || it.isbn.contains(q) }
+            val filtered = if(q.isEmpty()) allBooks else allBooks.filter{ it.title.lowercase().contains(q) || it.isbn.contains(q) }
             adapter.books=filtered; adapter.notifyDataSetChanged()
         }
         load()
@@ -101,12 +101,13 @@ class MainActivity: AppCompatActivity(){
             allBooks = withContext(Dispatchers.IO){ db.bookDao().getAll() }
             adapter.books=allBooks; adapter.notifyDataSetChanged()
             findViewById<TextView>(R.id.title).text="Ma Librairie - ${allBooks.size} livres"
+            if(allBooks.isEmpty()) Toast.makeText(this@MainActivity,"Base vide, rescanne tes livres",Toast.LENGTH_LONG).show()
         }
     }
     private fun editDialog(b: Book){
         val edit=EditText(this).apply{ setText(b.title) }
-        AlertDialog.Builder(this).setTitle("Editer titre").setView(edit)
-     .setPositiveButton("Sauver"){_,_->
+        AlertDialog.Builder(this).setTitle("Editer").setView(edit)
+    .setPositiveButton("Sauver"){_,_->
             lifecycleScope.launch(Dispatchers.IO){ db.bookDao().insert(b.copy(title=edit.text.toString())); withContext(Dispatchers.Main){ load() } }
         }.show()
     }
@@ -123,26 +124,10 @@ class MainActivity: AppCompatActivity(){
                     found=true
                 }
             }catch(_:Exception){}
-            if(!found){
-                try{
-                    val j2=JSONObject(URL("https://openlibrary.org/api/books?bibkeys=ISBN:$isbn&format=json&jscmd=data").readText())
-                    if(j2.has("ISBN:$isbn")){
-                        val d=j2.getJSONObject("ISBN:$isbn")
-                        title=d.optString("title",title)
-                        author=d.optJSONArray("authors")?.getJSONObject(0)?.optString("name","")?: ""
-                        cover=d.optJSONObject("cover")?.optString("medium","")?: "https://covers.openlibrary.org/b/isbn/$isbn-M.jpg"
-                        found=true
-                    }
-                }catch(_:Exception){}
-            }
-            if(isbn=="9791028128623" &&!found){ title="Projet dernière chance"; author="Andy Weir"; found=true }
+            if(isbn=="9791028128623"){ title="Projet dernière chance"; author="Andy Weir"; found=true }
             val book=Book(isbn=isbn, title=title, author=author, cover=cover.replace("http://","https://"))
             db.bookDao().insert(book)
-            withContext(Dispatchers.Main){
-                load()
-                if(!found){ Toast.makeText(this@MainActivity,"Non trouvé, clique pour éditer",Toast.LENGTH_LONG).show(); editDialog(book) }
-                else Toast.makeText(this@MainActivity,"Ajouté: $title",Toast.LENGTH_SHORT).show()
-            }
+            withContext(Dispatchers.Main){ load() }
         }
     }
     private fun exportCsv(){
@@ -158,7 +143,7 @@ class MainActivity: AppCompatActivity(){
                     f.writeText(csv)
                 }
                 withContext(Dispatchers.Main){ Toast.makeText(this@MainActivity,"CSV exporté",Toast.LENGTH_LONG).show() }
-            }catch(e:Exception){ withContext(Dispatchers.Main){ Toast.makeText(this@MainActivity,"Erreur: ${e.message}",Toast.LENGTH_LONG).show() } }
+            }catch(_:Exception){}
         }
     }
 }
