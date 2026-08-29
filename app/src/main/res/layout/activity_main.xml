@@ -1,18 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#1A1612">
-    <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="#2D241E" android:padding="16dp">
-        <TextView android:id="@+id/title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="📚 MA BIBLIOTHEQUE" android:textSize="24sp" android:textStyle="bold" android:textColor="#F5E6D3" android:fontFamily="serif"/>
-        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Collection privée" android:textColor="#B8A99A" android:textSize="12sp"/>
-        <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp">
-            <EditText android:id="@+id/search" android:layout_width="0dp" android:layout_weight="1" android:layout_height="48dp" android:hint="Rechercher un trésor..." android:background="#3D3229" android:textColor="#F5E6D3" android:textColorHint="#B8A99A" android:padding="12dp"/>
-            <Switch android:id="@+id/switchRafale" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="RAFALE" android:textColor="#D4AF37" android:checked="true" android:layout_marginLeft="8dp"/>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/rootLayout" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#1A1612">
+    <!-- Fond perso -->
+    <ImageView android:id="@+id/bgImage" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="centerCrop" android:visibility="gone"/>
+    <View android:id="@+id/bgOverlay" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#AA1A1612" android:visibility="gone"/>
+
+    <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent">
+        <LinearLayout android:id="@+id/headerLayout" android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="#2D241E" android:padding="16dp">
+            <TextView android:id="@+id/title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="📚 MA BIBLIOTHEQUE" android:textSize="24sp" android:textStyle="bold" android:textColor="#F5E6D3" android:fontFamily="serif"/>
+            <TextView android:id="@+id/subtitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Collection privée" android:textColor="#B8A99A" android:textSize="12sp"/>
+            <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp">
+                <EditText android:id="@+id/search" android:layout_width="0dp" android:layout_weight="1" android:layout_height="48dp" android:hint="Rechercher..." android:background="#3D3229" android:textColor="#F5E6D3" android:textColorHint="#B8A99A" android:padding="12dp"/>
+                <Switch android:id="@+id/switchRafale" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="RAFALE" android:textColor="#D4AF37" android:checked="true" android:layout_marginStart="8dp"/>
+            </LinearLayout>
+            <Spinner android:id="@+id/spinnerCat" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp"/>
         </LinearLayout>
-        <Spinner android:id="@+id/spinnerCat" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp"/>
+        <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="8dp">
+            <Button android:id="@+id/btnScan" android:layout_width="0dp" android:layout_weight="2" android:layout_height="60dp" android:text="📷 SCANNER" android:textColor="#1A1612" android:textStyle="bold"/>
+            <Button android:id="@+id/btnTheme" android:layout_width="0dp" android:layout_weight="1" android:layout_height="60dp" android:text="🎨" android:layout_marginStart="8dp" android:backgroundTint="#3D3229" android:textColor="#F5E6D3"/>
+            <Button android:id="@+id/btnImport" android:layout_width="0dp" android:layout_weight="1" android:layout_height="60dp" android:text="IMP" android:layout_marginStart="8dp" android:backgroundTint="#3D3229" android:textColor="#F5E6D3"/>
+            <Button android:id="@+id/btnExport" android:layout_width="0dp" android:layout_weight="1" android:layout_height="60dp" android:text="CSV" android:layout_marginStart="8dp" android:backgroundTint="#3D3229" android:textColor="#F5E6D3"/>
+        </LinearLayout>
+        <androidx.recyclerview.widget.RecyclerView android:id="@+id/recycler" android:layout_width="match_parent" android:layout_height="match_parent"/>
     </LinearLayout>
-    <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="8dp" android:background="#1A1612">
-        <Button android:id="@+id/btnScan" android:layout_width="0dp" android:layout_weight="2" android:layout_height="60dp" android:text="📷 SCANNER" android:backgroundTint="#D4AF37" android:textColor="#1A1612" android:textStyle="bold"/>
-        <Button android:id="@+id/btnImport" android:layout_width="0dp" android:layout_weight="1" android:layout_height="60dp" android:text="IMP" android:layout_marginLeft="8dp" android:backgroundTint="#3D3229" android:textColor="#F5E6D3"/>
-        <Button android:id="@+id/btnExport" android:layout_width="0dp" android:layout_weight="1" android:layout_height="60dp" android:text="CSV" android:layout_marginLeft="8dp" android:backgroundTint="#3D3229" android:textColor="#F5E6D3"/>
-    </LinearLayout>
-    <androidx.recyclerview.widget.RecyclerView android:id="@+id/recycler" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#1A1612"/>
-</LinearLayout>
+</FrameLayout>
