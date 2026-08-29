@@ -151,20 +151,66 @@ class MainActivity: AppCompatActivity(){
         (URL(urlStr).openConnection() as HttpURLConnection).apply{ setRequestProperty("User-Agent","Mozilla/5.0"); connectTimeout=8000; readTimeout=8000 }.inputStream.bufferedReader().readText()
     }catch(_:Exception){ null }
 
-    private fun fetchAndSave(isbn: String, onDone: ()->Unit={}){
-        lifecycleScope.launch(Dispatchers.IO){
-            var title=""; var author=""; var cover=""; var found=false
-            httpGet("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn")?.let{ body ->
-                try{ val j=JSONObject(body); if(j.optInt("totalItems",0)>0){ val vi=j.getJSONArray("items").getJSONObject(0).getJSONObject("volumeInfo"); title=vi.optString("title",""); author=vi.optJSONArray("authors")?.optString(0)?: ""; cover=vi.optJSONObject("imageLinks")?.optString("thumbnail","")?: ""; if(title.isNotEmpty()) found=true } }catch(_:Exception){}
+   private fun fetchAndSave(isbn: String, onDone: ()->Unit={}){
+    lifecycleScope.launch(Dispatchers.IO){
+        var title=""; var author=""; var cover=""; var found=false
+
+        // 1 - OpenLibrary (ILLIMITE - on commence par lui maintenant)
+        httpGet("https://openlibrary.org/api/books?bibkeys=ISBN:$isbn&format=json&jscmd=data")?.let{ body ->
+            try{
+                val j=JSONObject(body)
+                if(j.has("ISBN:$isbn")){
+                    val d=j.getJSONObject("ISBN:$isbn")
+                    title=d.optString("title","")
+                    author=d.optJSONArray("authors")?.getJSONObject(0)?.optString("name","")?: ""
+                    cover=d.optJSONObject("cover")?.optString("medium","")?: "https://covers.openlibrary.org/b/isbn/$isbn-M.jpg"
+                    if(title.isNotEmpty()) found=true
+                }
+            }catch(_:Exception){}
+        }
+
+        // 2 - OpenLibrary direct si 1 a échoué
+        if(!found){
+            httpGet("https://openlibrary.org/isbn/$isbn.json")?.let{ body ->
+                try{
+                    val j=JSONObject(body)
+                    title=j.optString("title","")
+                    if(title.isNotEmpty()){
+                        found=true
+                        cover="https://covers.openlibrary.org/b/isbn/$isbn-M.jpg"
+                    }
+                }catch(_:Exception){}
             }
-            if(!found){ httpGet("https://openlibrary.org/api/books?bibkeys=ISBN:$isbn&format=json&jscmd=data")?.let{ body -> try{ val j=JSONObject(body); if(j.has("ISBN:$isbn")){ val d=j.getJSONObject("ISBN:$isbn"); title=d.optString("title",""); author=d.optJSONArray("authors")?.getJSONObject(0)?.optString("name","")?: ""; cover=d.optJSONObject("cover")?.optString("medium","")?: ""; if(title.isNotEmpty()) found=true } }catch(_:Exception){} } }
-            if(!found) title="Livre $isbn"
-            val book=Book(isbn=isbn, title=title, author=author, cover=cover.replace("http://","https://"))
-            db.bookDao().insert(book)
-            withContext(Dispatchers.Main){ load(); Toast.makeText(this@MainActivity,if(found) "Ajouté: $title" else "Ajouté (à compléter)",Toast.LENGTH_SHORT).show(); onDone() }
+        }
+
+        // 3 - Google Books seulement en dernier recours (peut renvoyer 429)
+        if(!found){
+            httpGet("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn")?.let{ body ->
+                try{
+                    if(!body.contains("Quota exceeded")){
+                        val j=JSONObject(body)
+                        if(j.optInt("totalItems",0)>0){
+                            val vi=j.getJSONArray("items").getJSONObject(0).getJSONObject("volumeInfo")
+                            title=vi.optString("title","")
+                            author=vi.optJSONArray("authors")?.optString(0)?: author
+                            if(title.isNotEmpty()) found=true
+                        }
+                    }
+                }catch(_:Exception){}
+            }
+        }
+
+        if(!found) title="Livre $isbn (à compléter)"
+
+        val book=Book(isbn=isbn, title=title, author=author, cover=cover.replace("http://","https://"))
+        db.bookDao().insert(book)
+        withContext(Dispatchers.Main){
+            load()
+            Toast.makeText(this@MainActivity,if(found) "Trouvé: $title" else "Ajouté sans titre (quota Google)",Toast.LENGTH_SHORT).show()
+            onDone()
         }
     }
-
+}
     private fun importCsvFile(uri: Uri){
         lifecycleScope.launch(Dispatchers.IO){
             try{
