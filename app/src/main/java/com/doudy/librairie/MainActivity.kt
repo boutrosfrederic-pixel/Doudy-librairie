@@ -36,20 +36,31 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.URL
 
+// ==========================================
+// 1. BASE DE DONNÉES & ENTITÉS ROOM
+// ==========================================
+
 @Entity
 data class Book(
     @PrimaryKey val isbn: String,
     val title: String,
     val authors: String,
-    val coverUrl: String
+    val coverUrl: String = "",
+    val description: String = "",
+    val status: String = "À lire"
 )
 
 @Dao
 interface BookDao {
-    @Query("SELECT * FROM Book ORDER BY isbn DESC")
+    @Query("SELECT * FROM Book ORDER BY title ASC")
     fun getAllBooks(): Flow<List<Book>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBook(book: Book)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertBooks(books: List<Book>)
+
     @Delete
     suspend fun deleteBook(book: Book)
 }
@@ -59,13 +70,25 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun bookDao(): BookDao
 }
 
+// ==========================================
+// 2. ACTIVITÉ PRINCIPALE
+// ==========================================
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "doudy.db").build()
-        setContent { MaterialTheme { MainScreen(db.bookDao()) } }
+        setContent { 
+            MaterialTheme { 
+                MainScreen(db.bookDao()) 
+            } 
+        }
     }
 }
+
+// ==========================================
+// 3. ÉCRAN ET COMPOSABLES UI
+// ==========================================
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,6 +104,7 @@ fun MainScreen(dao: BookDao) {
         )
     }
 
+    // Mise à jour automatique des titres temporaires si besoin
     LaunchedEffect(books) {
         val toFix = books.filter { it.title.startsWith("Livre ") }
         for (old in toFix) {
@@ -103,7 +127,7 @@ fun MainScreen(dao: BookDao) {
                         showScan = true
                     } else {
                         activity.requestPermissions(arrayOf(android.Manifest.permission.CAMERA), 101)
-                        Toast.makeText(context, "Autorise la camera puis reessaie", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Autorisez la caméra puis réessayez", Toast.LENGTH_SHORT).show()
                     }
                 }
             )
@@ -112,11 +136,11 @@ fun MainScreen(dao: BookDao) {
         Box(Modifier.fillMaxSize().padding(pad)) {
             if (books.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Aucun livre. Appuie sur Scanner", color = Color.Gray)
+                    Text("Aucun livre. Appuyez sur Scanner", color = Color.Gray)
                 }
             } else {
                 LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(books) { book ->
+                    items(books, key = { it.isbn }) { book ->
                         Card(Modifier.fillMaxWidth()) {
                             Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 AsyncImage(
@@ -139,16 +163,17 @@ fun MainScreen(dao: BookDao) {
                     }
                 }
             }
+
             if (showScan) {
                 CameraView(
                     onScanned = { isbn ->
                         showScan = false
-                        val clean = isbn.filter { it.isDigit() }
+                        val clean = isbn.filter { it.isDigit() || it == 'X' || it == 'x' }
                         if (clean.length >= 10) {
                             scope.launch {
                                 val book = fetchBookInfo(clean)
                                 dao.insertBook(book)
-                                Toast.makeText(context, "Ajoute: " + book.title, Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Ajouté : " + book.title, Toast.LENGTH_SHORT).show()
                             }
                         }
                     },
@@ -159,16 +184,25 @@ fun MainScreen(dao: BookDao) {
     }
 }
 
+// ==========================================
+// 4. LOGIQUE DE RECHERCHE API (Google + OpenLibrary)
+// ==========================================
+
 suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
     var title = "Livre $isbn"
     var authors = "Auteur inconnu"
-    var cover = "https://covers.openlibrary.org/b/isbn/" + isbn + "-M.jpg"
+    var cover = "https://covers.openlibrary.org/b/isbn/$isbn-M.jpg"
+    var description = ""
+
+    // 1. Essai avec Google Books API
     try {
-        val jsonStr = URL("https://www.googleapis.com/books/v1/volumes?q=isbn:" + isbn).readText()
+        val jsonStr = URL("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn").readText()
         val json = JSONObject(jsonStr)
         if (json.optInt("totalItems", 0) > 0) {
             val info = json.getJSONArray("items").getJSONObject(0).getJSONObject("volumeInfo")
             title = info.optString("title", title)
+            description = info.optString("description", "")
+
             if (info.has("authors")) {
                 val arr = info.getJSONArray("authors")
                 val list = mutableListOf<String>()
@@ -179,11 +213,41 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
                 val thumb = info.getJSONObject("imageLinks").optString("thumbnail", cover)
                 cover = thumb.replace("http:", "https:")
             }
+            return@withContext Book(isbn, title, authors, cover, description)
         }
     } catch (e: Exception) {
+        // En cas d'échec Google, on poursuit vers le deuxième essai
     }
-    Book(isbn, title, authors, cover)
+
+    // 2. Essai de secours avec OpenLibrary API si Google n'a pas trouvé le titre
+    try {
+        val jsonStr = URL("https://openlibrary.org/api/books?bibkeys=ISBN:$isbn&jscmd=data&format=json").readText()
+        val json = JSONObject(jsonStr)
+        if (json.has("ISBN:$isbn")) {
+            val bookObj = json.getJSONObject("ISBN:$isbn")
+            title = bookObj.optString("title", title)
+            if (bookObj.has("authors")) {
+                val arr = bookObj.getJSONArray("authors")
+                val list = mutableListOf<String>()
+                for (i in 0 until arr.length()) {
+                    list.add(arr.getJSONObject(i).optString("name", ""))
+                }
+                authors = list.filter { it.isNotBlank() }.joinToString(", ")
+            }
+            if (bookObj.has("cover")) {
+                cover = bookObj.getJSONObject("cover").optString("medium", cover).replace("http:", "https:")
+            }
+        }
+    } catch (e: Exception) {
+        // Ignorer l'erreur et retourner ce qu'on a
+    }
+
+    Book(isbn = isbn, title = title, authors = authors, coverUrl = cover, description = description)
 }
+
+// ==========================================
+// 5. COMPOSABLE CAMÉRA (ML KIT)
+// ==========================================
 
 @Composable
 fun CameraView(onScanned: (String) -> Unit, onClose: () -> Unit) {
@@ -231,7 +295,7 @@ fun CameraView(onScanned: (String) -> Unit, onClose: () -> Unit) {
                         provider.unbindAll()
                         provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
                     } catch (e: Exception) {
-                        Toast.makeText(ctx, "Erreur: " + e.message, Toast.LENGTH_LONG).show()
+                        Toast.makeText(ctx, "Erreur : " + e.message, Toast.LENGTH_LONG).show()
                     }
                 }, ContextCompat.getMainExecutor(ctx))
                 previewView
