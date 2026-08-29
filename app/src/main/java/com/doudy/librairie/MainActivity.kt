@@ -1,6 +1,5 @@
 package com.doudy.librairie
 
-import android.content.Context
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -36,7 +35,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.URL
-import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 @Entity
@@ -55,8 +53,6 @@ interface BookDao {
     suspend fun insertBook(book: Book)
     @Delete
     suspend fun deleteBook(book: Book)
-    @Query("SELECT * FROM Book WHERE isbn = :isbn LIMIT 1")
-    suspend fun getByIsbn(isbn: String): Book?
 }
 
 @Database(entities = [Book::class], version = 1)
@@ -65,25 +61,28 @@ abstract class AppDatabase : RoomDatabase() {
 }
 
 class MainActivity : ComponentActivity() {
-    private lateinit var cameraExecutor: ExecutorService
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        cameraExecutor = Executors.newSingleThreadExecutor()
         val db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "doudy.db").build()
         setContent { MaterialTheme { MainScreen(db.bookDao()) } }
     }
-    override fun onDestroy() { super.onDestroy(); cameraExecutor.shutdown() }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(dao: BookDao) {
     val context = LocalContext.current
+    val activity = context as ComponentActivity
     val scope = rememberCoroutineScope()
     val books by dao.getAllBooks().collectAsState(initial = emptyList())
     var showScan by remember { mutableStateOf(false) }
+    var hasCameraPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
 
-    // Auto-corrige les 3 livres "Livre 978..." déjà scannés
+    // Auto-fix les 3 anciens "Livre 978..."
     LaunchedEffect(books) {
         books.filter { it.title.startsWith("Livre ") }.forEach { old ->
             val real = fetchBookInfo(old.isbn)
@@ -97,138 +96,25 @@ fun MainScreen(dao: BookDao) {
             ExtendedFloatingActionButton(
                 text = { Text("Scanner") },
                 icon = { Icon(Icons.Filled.Add, null) },
-                onClick = { showScan = true }
+                onClick = {
+                    hasCameraPermission = ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    if (hasCameraPermission) showScan = true
+                    else {
+                        activity.requestPermissions(arrayOf(android.Manifest.permission.CAMERA), 101)
+                        Toast.makeText(context, "Autorise la caméra puis réessaie", Toast.LENGTH_SHORT).show()
+                    }
+                }
             )
         }
     ) { pad ->
         Box(Modifier.fillMaxSize().padding(pad)) {
-            LazyColumn(
-                Modifier.fillMaxSize().padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items(books) { book ->
-                    Card(Modifier.fillMaxWidth()) {
-                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            AsyncImage(
-                                model = book.coverUrl,
-                                contentDescription = null,
-                                modifier = Modifier.size(60.dp, 90.dp).background(Color.LightGray),
-                                contentScale = ContentScale.Crop
-                            )
-                            Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(book.title, style = MaterialTheme.typography.titleMedium, maxLines = 2)
-                                Text(book.authors, style = MaterialTheme.typography.bodySmall)
-                                Text(book.isbn, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                            }
-                            IconButton(onClick = { scope.launch { dao.deleteBook(book) } }) {
-                                Icon(Icons.Filled.Delete, null)
-                            }
-                        }
-                    }
+            if (books.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("Aucun livre. Appuie sur Scanner", color = Color.Gray)
                 }
-            }
-            if (showScan) {
-                CameraView(
-                    onScanned = { isbn ->
-                        showScan = false
-                        val clean = isbn.filter { it.isDigit() }
-                        scope.launch {
-                            val book = fetchBookInfo(clean)
-                            dao.insertBook(book)
-                            Toast.makeText(context, "Ajouté: ${book.title}", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    onClose = { showScan = false }
-                )
-            }
-        }
-    }
-}
-
-suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
-    var title = "Livre $isbn"
-    var authors = "Auteur inconnu"
-    var cover = "https://covers.openlibrary.org/b/isbn/$isbn-M.jpg"
-    try {
-        val jsonStr = URL("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn").readText()
-        val json = JSONObject(jsonStr)
-        if (json.optInt("totalItems", 0) > 0) {
-            val info = json.getJSONArray("items").getJSONObject(0).getJSONObject("volumeInfo")
-            title = info.optString("title", title)
-            if (info.has("authors")) {
-                val arr = info.getJSONArray("authors")
-                authors = (0 until arr.length()).joinToString(", ") { arr.getString(it) }
-            }
-            if (info.has("imageLinks")) {
-                cover = info.getJSONObject("imageLinks").optString("thumbnail", cover).replace("http://","https://")
-            }
-        }
-    } catch (e: Exception) { e.printStackTrace() }
-    Book(isbn, title, authors, cover)
-}
-
-@Composable
-fun CameraView(onScanned: (String) -> Unit, onClose: () -> Unit) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var scanned by remember { mutableStateOf(false) }
-    val previewView = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER } }
-
-    LaunchedEffect(previewView) {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-        cameraProviderFuture.addListener({
-            val provider = cameraProviderFuture.get()
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(previewView.surfaceProvider)
-            }
-            val scanner = BarcodeScanning.getClient()
-            val analysis = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-            analysis.setAnalyzer(ContextCompat.getMainExecutor(context)) { proxy ->
-                val mediaImage = proxy.image
-                if (mediaImage != null && !scanned) {
-                    val image = InputImage.fromMediaImage(mediaImage, proxy.imageInfo.rotationDegrees)
-                    scanner.process(image)
-                        .addOnSuccessListener { barcodes ->
-                            for (b in barcodes) {
-                                b.rawValue?.let { value ->
-                                    if (value.length >= 10) {
-                                        scanned = true
-                                        onScanned(value)
-                                    }
-                                }
-                            }
-                        }
-                        .addOnCompleteListener { proxy.close() }
-                } else {
-                    proxy.close()
-                }
-            }
-            try {
-                provider.unbindAll()
-                provider.bindToLifecycle(
-                    lifecycleOwner,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview,
-                    analysis
-                )
-            } catch (e: Exception) {
-                Toast.makeText(context, "Camera error: ${e.message}", Toast.LENGTH_LONG).show()
-            }
-        }, ContextCompat.getMainExecutor(context))
-    }
-
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
-        // Viseur blanc
-        Box(Modifier.fillMaxSize().padding(50.dp), contentAlignment = Alignment.Center) {
-            Box(Modifier.size(250.dp).background(Color.Transparent).fillMaxSize().align(Alignment.Center))
-        }
-        Button(onClick = onClose, modifier = Modifier.align(Alignment.TopCenter).padding(24.dp)) {
-            Text("Fermer")
-        }
-        Text("Vise le code-barres", color = Color.White, modifier = Modifier.align(Alignment.BottomCenter).padding(24.dp))
-    }
-}
+            } else {
+                LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(books) { book ->
+                        Card(Modifier.fillMaxWidth()) {
+                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Async
