@@ -10,7 +10,9 @@ import androidx.activity.compose.setContent
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -18,6 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -50,7 +54,7 @@ import java.io.InputStreamReader
 import java.net.URL
 
 // ==========================================
-// 1. ROOM DATABASE & ENTITÉ
+// 1. BASE DE DONNÉES ROOM (Mise à jour avec la colonne Series)
 // ==========================================
 
 @Entity
@@ -60,7 +64,8 @@ data class Book(
     val authors: String,
     val coverUrl: String = "",
     val description: String = "",
-    val status: String = "À lire"
+    val status: String = "À lire",
+    val series: String = ""
 )
 
 @Dao
@@ -78,19 +83,21 @@ interface BookDao {
     suspend fun deleteBook(book: Book)
 }
 
-@Database(entities = [Book::class], version = 1, exportSchema = false)
+@Database(entities = [Book::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun bookDao(): BookDao
 }
 
 // ==========================================
-// 2. ACTIVITÉ
+// 2. ACTIVITÉ PRINCIPALE
 // ==========================================
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "doudy.db").build()
+        val db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "doudy.db")
+            .fallbackToDestructiveMigration()
+            .build()
         setContent {
             MaterialTheme(
                 colorScheme = lightColorScheme(
@@ -105,7 +112,7 @@ class MainActivity : ComponentActivity() {
 }
 
 // ==========================================
-// 3. ÉCRAN PRINCIPAL AVEC DESIGN OPTIMISÉ
+// 3. ÉCRAN ET COMPOSABLES UI AVEC GROUPEMENT
 // ==========================================
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -120,12 +127,18 @@ fun MainScreen(dao: BookDao) {
     var showScan by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
 
-    val filteredBooks = remember(books, searchQuery) {
-        if (searchQuery.isBlank()) books
+    // Filtrage et regroupement par Série
+    val groupedBooks = remember(books, searchQuery) {
+        val filtered = if (searchQuery.isBlank()) books
         else books.filter {
             it.title.contains(searchQuery, ignoreCase = true) ||
             it.authors.contains(searchQuery, ignoreCase = true) ||
+            it.series.contains(searchQuery, ignoreCase = true) ||
             it.isbn.contains(searchQuery)
+        }
+        
+        filtered.groupBy { 
+            if (it.series.isNotBlank()) it.series else extractSeriesFromTitle(it.title) 
         }
     }
 
@@ -198,18 +211,17 @@ fun MainScreen(dao: BookDao) {
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
             
-            // Barre de recherche
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                placeholder = { Text("Rechercher un titre, auteur...") },
+                placeholder = { Text("Rechercher un titre, série, auteur...") },
                 leadingIcon = { Icon(Icons.Filled.Search, null) },
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp)
             )
 
-            if (filteredBooks.isEmpty()) {
+            if (groupedBooks.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("Aucun livre trouvé", color = Color.Gray)
                 }
@@ -218,8 +230,14 @@ fun MainScreen(dao: BookDao) {
                     modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(filteredBooks, key = { it.isbn }) { book ->
-                        BookItemCard(book = book, onDelete = { scope.launch { dao.deleteBook(book) } })
+                    groupedBooks.forEach { (seriesName, seriesBooks) ->
+                        item {
+                            SeriesSection(
+                                seriesName = seriesName,
+                                books = seriesBooks,
+                                onDeleteBook = { book -> scope.launch { dao.deleteBook(book) } }
+                            )
+                        }
                     }
                 }
             }
@@ -244,8 +262,48 @@ fun MainScreen(dao: BookDao) {
 }
 
 // ==========================================
-// 4. CARTE LIVRE ÉLÉGANTE
+// 4. GROUPE SÉRIE ACCORDÉON
 // ==========================================
+
+@Composable
+fun SeriesSection(seriesName: String, books: List<Book>, onDeleteBook: (Book) -> Unit) {
+    var expanded by remember { mutableStateOf(true) }
+    val isStandalone = seriesName == "Hors série" || seriesName.isBlank()
+
+    Column(Modifier.fillMaxWidth()) {
+        if (!isStandalone) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(seriesName, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                        Text("${books.size} tome(s)", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                    }
+                    Icon(
+                        imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        contentDescription = null
+                    )
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+        }
+
+        AnimatedVisibility(visible = expanded || isStandalone) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                books.forEach { book ->
+                    BookItemCard(book = book, onDelete = { onDeleteBook(book) })
+                }
+            }
+        }
+    }
+}
 
 @Composable
 fun BookItemCard(book: Book, onDelete: () -> Unit) {
@@ -256,7 +314,7 @@ fun BookItemCard(book: Book, onDelete: () -> Unit) {
     ) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             AsyncImage(
-                model = book.coverUrl,
+                model = if (book.coverUrl.isNotBlank()) book.coverUrl else "https://covers.openlibrary.org/b/isbn/${book.isbn}-M.jpg",
                 contentDescription = null,
                 modifier = Modifier
                     .size(60.dp, 90.dp)
@@ -307,7 +365,7 @@ fun BookItemCard(book: Book, onDelete: () -> Unit) {
 }
 
 // ==========================================
-// 5. PARSER CSV CORRIGÉ POUR BOOKSHELF
+// 5. IMPORT/EXPORT CSV COMPATIBLE BOOKSHELF
 // ==========================================
 
 suspend fun importBooksFromCsv(context: android.content.Context, uri: Uri, dao: BookDao): Int = withContext(Dispatchers.IO) {
@@ -323,6 +381,7 @@ suspend fun importBooksFromCsv(context: android.content.Context, uri: Uri, dao: 
                 val titleIdx = headers.indexOfFirst { it == "title" || it == "titre" }
                 val authorsIdx = headers.indexOfFirst { it == "authors" || it == "auteurs" || it == "author" }
                 val coverIdx = headers.indexOfFirst { it == "coverurl" || it == "imageurl" }
+                val seriesIdx = headers.indexOfFirst { it == "series" || it == "série" }
 
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
@@ -335,14 +394,22 @@ suspend fun importBooksFromCsv(context: android.content.Context, uri: Uri, dao: 
                         if (cleanIsbn.length >= 10) {
                             val title = if (titleIdx != -1 && titleIdx < tokens.size && tokens[titleIdx].isNotBlank()) tokens[titleIdx] else "Livre $cleanIsbn"
                             val authors = if (authorsIdx != -1 && authorsIdx < tokens.size && tokens[authorsIdx].isNotBlank()) tokens[authorsIdx] else "Auteur inconnu"
-                            val coverUrl = if (coverIdx != -1 && coverIdx < tokens.size && tokens[coverIdx].isNotBlank()) tokens[coverIdx] else "https://covers.openlibrary.org/b/isbn/$cleanIsbn-M.jpg"
+                            val explicitSeries = if (seriesIdx != -1 && seriesIdx < tokens.size) tokens[seriesIdx] else ""
+                            
+                            // Image automatique OpenLibrary par défaut si la case cover est vide
+                            val coverUrl = if (coverIdx != -1 && coverIdx < tokens.size && tokens[coverIdx].isNotBlank()) {
+                                tokens[coverIdx]
+                            } else {
+                                "https://covers.openlibrary.org/b/isbn/$cleanIsbn-M.jpg"
+                            }
 
                             importedBooks.add(
                                 Book(
                                     isbn = cleanIsbn,
                                     title = title,
                                     authors = authors,
-                                    coverUrl = coverUrl
+                                    coverUrl = coverUrl,
+                                    series = explicitSeries
                                 )
                             )
                         }
@@ -377,12 +444,27 @@ private fun parseCsvLine(line: String, delimiter: String): List<String> {
     return result
 }
 
+fun extractSeriesFromTitle(title: String): String {
+    val patterns = listOf(
+        Regex("""(?i)^(.*?)[,\s\-_]+(?:Tome|T|Vol|Volume)\b"""),
+        Regex("""(?i)^(.*?)\s+\d+$""")
+    )
+    for (pattern in patterns) {
+        val match = pattern.find(title)
+        if (match != null) {
+            val name = match.groupValues[1].trim()
+            if (name.length > 2) return name
+        }
+    }
+    return "Hors série"
+}
+
 suspend fun exportBooksToCsv(context: android.content.Context, uri: Uri, books: List<Book>): Boolean = withContext(Dispatchers.IO) {
     try {
         context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-            val builder = StringBuilder("ISBN,Title,Authors,CoverUrl,Status\n")
+            val builder = StringBuilder("ISBN,Title,Authors,Series,CoverUrl,Status\n")
             for (b in books) {
-                builder.append("\"${b.isbn}\",\"${b.title.replace("\"", "\"\"")}\",\"${b.authors.replace("\"", "\"\"")}\",\"${b.coverUrl}\",\"${b.status}\"\n")
+                builder.append("\"${b.isbn}\",\"${b.title.replace("\"", "\"\"")}\",\"${b.authors.replace("\"", "\"\"")}\",\"${b.series.replace("\"", "\"\"")}\",\"${b.coverUrl}\",\"${b.status}\"\n")
             }
             outputStream.write(builder.toString().toByteArray())
         }
@@ -393,20 +475,23 @@ suspend fun exportBooksToCsv(context: android.content.Context, uri: Uri, books: 
 }
 
 // ==========================================
-// 6. LOGIQUE API & COMPOSABLE CAMÉRA
+// 6. LOGIQUE RECHERCHE MULTI-API (Google + OpenLibrary)
 // ==========================================
 
 suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
     var title = "Livre $isbn"
     var authors = "Auteur inconnu"
     var cover = "https://covers.openlibrary.org/b/isbn/$isbn-M.jpg"
+    var series = ""
 
+    // 1er essai : Google Books API
     try {
         val jsonStr = URL("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn").readText()
         val json = JSONObject(jsonStr)
         if (json.optInt("totalItems", 0) > 0) {
             val info = json.getJSONArray("items").getJSONObject(0).getJSONObject("volumeInfo")
             title = info.optString("title", title)
+
             if (info.has("authors")) {
                 val arr = info.getJSONArray("authors")
                 val list = mutableListOf<String>()
@@ -419,8 +504,30 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
         }
     } catch (e: Exception) {}
 
-    Book(isbn = isbn, title = title, authors = authors, coverUrl = cover)
+    // 2ème essai de secours pour l'image et la série : OpenLibrary
+    try {
+        val jsonStr = URL("https://openlibrary.org/api/books?bibkeys=ISBN:$isbn&jscmd=data&format=json").readText()
+        val json = JSONObject(jsonStr)
+        if (json.has("ISBN:$isbn")) {
+            val bookObj = json.getJSONObject("ISBN:$isbn")
+            if (title.startsWith("Livre ")) {
+                title = bookObj.optString("title", title)
+            }
+            if (bookObj.has("cover")) {
+                val olCover = bookObj.getJSONObject("cover").optString("medium", "").replace("http:", "https:")
+                if (olCover.isNotBlank()) cover = olCover
+            }
+        }
+    } catch (e: Exception) {}
+
+    series = extractSeriesFromTitle(title)
+
+    Book(isbn = isbn, title = title, authors = authors, coverUrl = cover, series = series)
 }
+
+// ==========================================
+// 7. COMPOSABLE CAMÉRA DE SCAN
+// ==========================================
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
