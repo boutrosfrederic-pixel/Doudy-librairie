@@ -238,7 +238,7 @@ fun MainScreen(dao: BookDao) {
 }
 
 // ==========================================
-// 4. IMPORTATION & EXPORTATION CSV
+// IMPORTATION & EXPORTATION CSV (Compatible Bookshelf)
 // ==========================================
 
 suspend fun importBooksFromCsv(context: android.content.Context, uri: Uri, dao: BookDao): Int = withContext(Dispatchers.IO) {
@@ -246,27 +246,63 @@ suspend fun importBooksFromCsv(context: android.content.Context, uri: Uri, dao: 
     try {
         context.contentResolver.openInputStream(uri)?.use { inputStream ->
             BufferedReader(InputStreamReader(inputStream)).use { reader ->
-                var line = reader.readLine() // Lire l'en-tête
-                while (reader.readLine().also { line = it } != null) {
-                    val tokens = line?.split(";") ?: continue
-                    if (tokens.isNotEmpty() && tokens[0].isNotBlank()) {
-                        val isbn = tokens[0].replace("\"", "").trim()
-                        val title = if (tokens.size > 1) tokens[1].replace("\"", "").trim() else "Livre $isbn"
-                        val authors = if (tokens.size > 2) tokens[2].replace("\"", "").trim() else "Auteur inconnu"
-                        val coverUrl = if (tokens.size > 3) tokens[3].replace("\"", "").trim() else ""
-                        val description = if (tokens.size > 4) tokens[4].replace("\"", "").trim() else ""
-                        val status = if (tokens.size > 5) tokens[5].replace("\"", "").trim() else "À lire"
+                val headerLine = reader.readLine() ?: return@withContext 0
+                
+                // Détection automatique du séparateur (, ou ;)
+                val delimiter = if (headerLine.contains(";")) ";" else ","
+                val headers = parseCsvLine(headerLine, delimiter).map { it.lowercase().trim() }
 
-                        importedBooks.add(
-                            Book(
-                                isbn = isbn,
-                                title = if (title.isBlank()) "Livre $isbn" else title,
-                                authors = if (authors.isBlank()) "Auteur inconnu" else authors,
-                                coverUrl = coverUrl,
-                                description = description,
-                                status = status
+                // Repérage des positions des colonnes selon l'en-tête (Bookshelf ou Perso)
+                val isbnIdx = headers.indexOfFirst { it == "isbn" }
+                val titleIdx = headers.indexOfFirst { it == "title" || it == "titre" }
+                val authorsIdx = headers.indexOfFirst { it == "authors" || it == "auteurs" || it == "author" }
+                val coverIdx = headers.indexOfFirst { it == "coverurl" || it == "imageurl" || it == "cover" }
+                val descIdx = headers.indexOfFirst { it == "description" }
+                val statusIdx = headers.indexOfFirst { it == "statut" || it == "bookshelf" || it == "read" }
+
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    if (line.isNull_or_blank()) continue
+                    val tokens = parseCsvLine(line!!, delimiter)
+                    
+                    if (isbnIdx != -1 && isbnIdx < tokens.size) {
+                        val rawIsbn = tokens[isbnIdx].replace("\"", "").trim()
+                        val isbn = rawIsbn.filter { it.isDigit() || it == 'X' || it == 'x' }
+                        
+                        if (isbn.length >= 10) {
+                            val title = if (titleIdx != -1 && titleIdx < tokens.size && tokens[titleIdx].isNotBlank()) {
+                                tokens[titleIdx]
+                            } else "Livre $isbn"
+
+                            val authors = if (authorsIdx != -1 && authorsIdx < tokens.size && tokens[authorsIdx].isNotBlank()) {
+                                tokens[authorsIdx]
+                            } else "Auteur inconnu"
+
+                            val coverUrl = if (coverIdx != -1 && coverIdx < tokens.size) tokens[coverIdx] else ""
+                            val description = if (descIdx != -1 && descIdx < tokens.size) tokens[descIdx] else ""
+                            
+                            // Détermination du statut (ex: Bookshelf ou Read = 1/0)
+                            var status = "À lire"
+                            if (statusIdx != -1 && statusIdx < tokens.size) {
+                                val valStatus = tokens[statusIdx].trim()
+                                if (valStatus == "1" || valStatus.equals("read", ignoreCase = true) || valStatus.equals("Lu", ignoreCase = true)) {
+                                    status = "Lu"
+                                } else if (valStatus.isNotBlank()) {
+                                    status = valStatus
+                                }
+                            }
+
+                            importedBooks.add(
+                                Book(
+                                    isbn = isbn,
+                                    title = title,
+                                    authors = authors,
+                                    coverUrl = if (coverUrl.isBlank()) "https://covers.openlibrary.org/b/isbn/$isbn-M.jpg" else coverUrl,
+                                    description = description,
+                                    status = status
+                                )
                             )
-                        )
+                        }
                     }
                 }
             }
@@ -280,14 +316,43 @@ suspend fun importBooksFromCsv(context: android.content.Context, uri: Uri, dao: 
     return@withContext importedBooks.size
 }
 
+/**
+ * Découpe proprement une ligne CSV en gérant les guillemets et virgules internes
+ */
+private fun parseCsvLine(line: String, delimiter: String): List<String> {
+    val result = mutableListOf<String>()
+    var cur = StringBuilder()
+    var inQuotes = false
+    
+    val delimChar = delimiter.first()
+    for (ch in line.toCharArray()) {
+        if (ch == '"') {
+            inQuotes = !inQuotes
+        } else if (ch == delimChar && !inQuotes) {
+            result.add(cur.toString().trim().removeSurrounding("\""))
+            cur = StringBuilder()
+        } else {
+            cur.append(ch)
+        }
+    }
+    result.add(cur.toString().trim().removeSurrounding("\""))
+    return result
+}
+
+// Extension utile
+private fun String?.isNull_or_blank(): Boolean = this == null || this.trim().isEmpty()
+
 suspend fun exportBooksToCsv(context: android.content.Context, uri: Uri, books: List<Book>): Boolean = withContext(Dispatchers.IO) {
     try {
         context.contentResolver.openOutputStream(uri)?.use { outputStream ->
             val builder = StringBuilder()
-            // En-tête CSV
-            builder.append("ISBN;Titre;Auteurs;ImageURL;Description;Statut\n")
+            // Format universel (Compatible avec Bookshelf et Excel)
+            builder.append("ISBN,Title,Authors,CoverUrl,Description,Status\n")
             for (b in books) {
-                builder.append("\"${b.isbn}\";\"${b.title.replace("\"", "\"\"")}\";\"${b.authors.replace("\"", "\"\"")}\";\"${b.coverUrl}\";\"${b.description.replace("\"", "\"\"")}\";\"${b.status}\"\n")
+                val cleanTitle = b.title.replace("\"", "\"\"")
+                val cleanAuthors = b.authors.replace("\"", "\"\"")
+                val cleanDesc = b.description.replace("\"", "\"\"")
+                builder.append("\"${b.isbn}\",\"$cleanTitle\",\"$cleanAuthors\",\"${b.coverUrl}\",\"$cleanDesc\",\"${b.status}\"\n")
             }
             outputStream.write(builder.toString().toByteArray())
         }
@@ -297,7 +362,6 @@ suspend fun exportBooksToCsv(context: android.content.Context, uri: Uri, books: 
         false
     }
 }
-
 // ==========================================
 // 5. LOGIQUE DE RECHERCHE API
 // ==========================================
