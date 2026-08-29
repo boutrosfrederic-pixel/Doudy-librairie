@@ -4,7 +4,7 @@
         <TextView android:id="@+id/title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="📚 MA BIBLIOTHEQUE" android:textSize="24sp" android:textStyle="bold" android:textColor="#F5E6D3" android:fontFamily="serif"/>
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Collection privée" android:textColor="#B8A99A" android:textSize="12sp"/>
         <LinearLayout android:orientation="horizontal" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp">
-            <EditText android:id="@+id/search" android:layout_width="0dp" android:layout_weight="1" android:layout_height="48dp" android:hint="Rechercher un trésor..." android:background="#3D3229" android:textColor="#F5E6D3" android:hintTextColor="#B8A99A" android:padding="12dp"/>
+            <EditText android:id="@+id/search" android:layout_width="0dp" android:layout_weight="1" android:layout_height="48dp" android:hint="Rechercher un trésor..." android:background="#3D3229" android:textColor="#F5E6D3" android:textColorHint="#B8A99A" android:padding="12dp"/>
             <Switch android:id="@+id/switchRafale" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="RAFALE" android:textColor="#D4AF37" android:checked="true" android:layout_marginLeft="8dp"/>
         </LinearLayout>
         <Spinner android:id="@+id/spinnerCat" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp"/>
