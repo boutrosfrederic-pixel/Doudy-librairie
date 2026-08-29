@@ -30,6 +30,7 @@ import coil.compose.AsyncImage
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -167,7 +168,6 @@ fun MainScreen(dao: BookDao) {
             if (showScan) {
                 CameraView(
                     onScanned = { isbn ->
-                        showScan = false
                         val clean = isbn.filter { it.isDigit() || it == 'X' || it == 'x' }
                         if (clean.length >= 10) {
                             scope.launch {
@@ -246,14 +246,19 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
 }
 
 // ==========================================
-// 5. COMPOSABLE CAMÉRA (ML KIT)
+// 5. COMPOSABLE CAMÉRA AVEC MODES UNIQUE ET CONTINU
 // ==========================================
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CameraView(onScanned: (String) -> Unit, onClose: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    var scanned by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    var isContinuousMode by remember { mutableStateOf(false) }
+    var isProcessingScan by remember { mutableStateOf(false) }
+    var lastScannedCode by remember { mutableStateOf("") }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
@@ -271,18 +276,37 @@ fun CameraView(onScanned: (String) -> Unit, onClose: () -> Unit) {
                     val analysis = ImageAnalysis.Builder()
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build()
+
                     analysis.setAnalyzer(ContextCompat.getMainExecutor(ctx)) { proxy ->
                         val mediaImage = proxy.image
-                        if (mediaImage != null && !scanned) {
+                        if (mediaImage != null && !isProcessingScan) {
                             val image = InputImage.fromMediaImage(mediaImage, proxy.imageInfo.rotationDegrees)
                             scanner.process(image)
                                 .addOnSuccessListener { barcodes ->
                                     for (b in barcodes) {
-                                        b.rawValue?.let { v ->
-                                            if (v.length >= 10 && !scanned) {
-                                                scanned = true
-                                                onScanned(v)
+                                        val rawVal = b.rawValue ?: continue
+                                        val cleanVal = rawVal.filter { it.isDigit() || it == 'X' || it == 'x' }
+
+                                        if (cleanVal.length >= 10 && !isProcessingScan) {
+                                            // Évite le re-scan instantané du même livre en mode continu
+                                            if (isContinuousMode && cleanVal == lastScannedCode) {
+                                                continue
                                             }
+
+                                            isProcessingScan = true
+                                            lastScannedCode = cleanVal
+                                            onScanned(cleanVal)
+
+                                            if (!isContinuousMode) {
+                                                onClose()
+                                            } else {
+                                                // Temporisation de 2 secondes avant d'autoriser un autre scan
+                                                scope.launch {
+                                                    delay(2000)
+                                                    isProcessingScan = false
+                                                }
+                                            }
+                                            break
                                         }
                                     }
                                 }
@@ -302,8 +326,52 @@ fun CameraView(onScanned: (String) -> Unit, onClose: () -> Unit) {
             },
             modifier = Modifier.fillMaxSize()
         )
-        Button(onClick = onClose, modifier = Modifier.align(Alignment.TopCenter).padding(24.dp)) {
-            Text("Fermer")
+
+        // En-tête avec sélecteur de mode et bouton Fermer
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .background(Color.Black.copy(alpha = 0.7f))
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (isContinuousMode) "Mode : Scan Continu" else "Mode : Scan Unique",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Button(onClick = onClose) {
+                    Text("Fermer")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Sélecteur (FilterChip / Single Choice)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = !isContinuousMode,
+                    onClick = { 
+                        isContinuousMode = false
+                        lastScannedCode = ""
+                    },
+                    label = { Text("Unique (1 livre)") }
+                )
+                FilterChip(
+                    selected = isContinuousMode,
+                    onClick = { 
+                        isContinuousMode = true 
+                        lastScannedCode = ""
+                    },
+                    label = { Text("En continu (Plusieurs)") }
+                )
+            }
         }
     }
 }
