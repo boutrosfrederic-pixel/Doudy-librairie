@@ -190,45 +190,56 @@ fun CameraView(onScanned: (String) -> Unit, onClose: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var scanned by remember { mutableStateOf(false) }
-    val previewView = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER } }
-
-    LaunchedEffect(previewView) {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-        cameraProviderFuture.addListener({
-            val provider = cameraProviderFuture.get()
-            val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
-            val scanner = BarcodeScanning.getClient()
-            val analysis = ImageAnalysis.Builder().setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build()
-            analysis.setAnalyzer(ContextCompat.getMainExecutor(context)) { proxy ->
-                val mediaImage = proxy.image
-                if (mediaImage != null && !scanned) {
-                    val image = InputImage.fromMediaImage(mediaImage, proxy.imageInfo.rotationDegrees)
-                    scanner.process(image).addOnSuccessListener { barcodes ->
-                        for (b in barcodes) {
-                            b.rawValue?.let { v ->
-                                if (v.length >= 10 && !scanned) {
-                                    scanned = true
-                                    onScanned(v)
-                                }
-                            }
-                        }
-                    }.addOnCompleteListener { proxy.close() }
-                } else {
-                    proxy.close()
-                }
-            }
-            try {
-                provider.unbindAll()
-                provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
-            } catch (e: Exception) {
-                Toast.makeText(context, "Erreur camera: " + e.message, Toast.LENGTH_LONG).show()
-            }
-        }, ContextCompat.getMainExecutor(context))
-    }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
-        Button(onClick = onClose, modifier = Modifier.align(Alignment.TopCenter).padding(24.dp)) { Text("Fermer") }
-        Text("Vise le code-barres", color = Color.White, modifier = Modifier.align(Alignment.BottomCenter).padding(32.dp))
+        AndroidView(
+            factory = { ctx ->
+                val previewView = PreviewView(ctx).apply {
+                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                }
+                val future = ProcessCameraProvider.getInstance(ctx)
+                future.addListener({
+                    val provider = future.get()
+                    val preview = Preview.Builder().build().apply {
+                        setSurfaceProvider(previewView.surfaceProvider)
+                    }
+                    val scanner = BarcodeScanning.getClient()
+                    val analysis = ImageAnalysis.Builder()
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .build()
+                    analysis.setAnalyzer(ContextCompat.getMainExecutor(ctx)) { proxy ->
+                        val mediaImage = proxy.image
+                        if (mediaImage != null && !scanned) {
+                            val image = InputImage.fromMediaImage(mediaImage, proxy.imageInfo.rotationDegrees)
+                            scanner.process(image)
+                                .addOnSuccessListener { barcodes ->
+                                    for (b in barcodes) {
+                                        b.rawValue?.let { v ->
+                                            if (v.length >= 10 && !scanned) {
+                                                scanned = true
+                                                onScanned(v)
+                                            }
+                                        }
+                                    }
+                                }
+                                .addOnCompleteListener { proxy.close() }
+                        } else {
+                            proxy.close()
+                        }
+                    }
+                    try {
+                        provider.unbindAll()
+                        provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                    } catch (e: Exception) {
+                        Toast.makeText(ctx, "Erreur: " + e.message, Toast.LENGTH_LONG).show()
+                    }
+                }, ContextCompat.getMainExecutor(ctx))
+                previewView
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+        Button(onClick = onClose, modifier = Modifier.align(Alignment.TopCenter).padding(24.dp)) {
+            Text("Fermer")
+        }
     }
 }
