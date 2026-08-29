@@ -1,129 +1,201 @@
 package com.doudy.librairie
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
-import android.view.View
-import android.view.ViewGroup
-import android.widget.*
+import android.util.Log
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
-import androidx.appcompat.app.AppCompatActivity
-import androidx.core.widget.addTextChangedListener
-import androidx.lifecycle.lifecycleScope
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
+import androidx.camera.core.*
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.room.*
-import coil.load
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
+import coil.compose.AsyncImage
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.Executors
 
-@Entity data class Book(@PrimaryKey val isbn: String, val title: String, val author: String="", val category: String="Roman", val cover: String="", val dateAdded: Long=System.currentTimeMillis())
-@Dao interface BookDao{ @Query("SELECT * FROM Book ORDER BY dateAdded DESC") suspend fun getAll(): List<Book>; @Insert(onConflict=OnConflictStrategy.REPLACE) suspend fun insert(b: Book); @Delete suspend fun delete(b: Book) }
-@Database(entities=[Book::class], version=1, exportSchema=false) abstract class AppDatabase: RoomDatabase(){ abstract fun bookDao(): BookDao }
+@Entity(tableName = "books")
+data class Book(
+    @PrimaryKey val isbn: String,
+    val title: String,
+    val authors: String,
+    val coverUrl: String = "",
+    val status: String = "À lire",
+    val description: String = ""
+)
 
-class MainActivity: AppCompatActivity(){
-    private lateinit var db: AppDatabase
-    private lateinit var adapter: BookAdapter
-    private var allBooks: List<Book> = emptyList()
-    private var isMultiScan = true
-    private var currentFilter = "Tous"
-    private val importLauncher = registerForActivityResult(ActivityResultContracts.GetContent()){ if(it!=null) importCsvFile(it) }
-    private val scanLauncher = registerForActivityResult(ScanContract()){ r-> if(r.contents!=null){ fetchAndSave(r.contents){ if(isMultiScan){ lifecycleScope.launch{ delay(1200); launchScan() } } } } }
+@Dao
+interface BookDao {
+    @Query("SELECT * FROM books")
+    fun getAllBooks(): Flow<List<Book>>
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertBook(book: Book)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertBooks(books: List<Book>)
+    @Delete
+    suspend fun deleteBook(book: Book)
+}
 
-    override fun onCreate(savedInstanceState: Bundle?){
-        super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-        db = Room.databaseBuilder(this, AppDatabase::class.java, "doudy-v16").fallbackToDestructiveMigration().build()
-        adapter = BookAdapter(emptyList())
-        findViewById<RecyclerView>(R.id.recycler).layoutManager=LinearLayoutManager(this)
-        findViewById<RecyclerView>(R.id.recycler).adapter=adapter
-        findViewById<View>(R.id.btnScan).setOnClickListener{ launchScan() }
-        findViewById<View>(R.id.btnExport)?.setOnClickListener{ exportCsv() }
-        findViewById<View>(R.id.btnImport)?.setOnClickListener{ importLauncher.launch("text/*") }
-        findViewById<EditText>(R.id.search).addTextChangedListener{ applyFilters(it.toString()) }
-        load()
-    }
-
-    fun launchScan(){ val o=ScanOptions().apply{ setDesiredBarcodeFormats(ScanOptions.EAN_13); setPrompt("RAFALE ${allBooks.size}"); setBeepEnabled(true); setOrientationLocked(true); setCaptureActivity(MyCaptureActivity::class.java) }; scanLauncher.launch(o) }
-    private fun applyFilters(q: String){ var list=allBooks; if(q.isNotEmpty()){ val s=q.lowercase(); list=list.filter{ it.title.lowercase().contains(s) || it.author.lowercase().contains(s) } }; adapter.books=list; adapter.notifyDataSetChanged(); findViewById<TextView>(R.id.title).text="📚 ${list.size} livres" }
-    private fun load(){ lifecycleScope.launch{ allBooks=withContext(Dispatchers.IO){ db.bookDao().getAll() }; applyFilters("") } }
-    fun deleteBook(b: Book){ AlertDialog.Builder(this).setTitle("Supprimer ${b.title}?").setPositiveButton("Oui"){_,_-> lifecycleScope.launch{ withContext(Dispatchers.IO){ db.bookDao().delete(b) }; load() }}.setNegativeButton("Non",null).show() }
-    fun editBook(b: Book){ val lay=LinearLayout(this).apply{ orientation=1; setPadding(32,16,32,16) }; val et1=EditText(this).apply{ setText(b.title) }; val et2=EditText(this).apply{ setText(b.author) }; lay.addView(et1); lay.addView(et2); AlertDialog.Builder(this).setTitle("Editer").setView(lay).setPositiveButton("Sauver"){_,_-> lifecycleScope.launch(Dispatchers.IO){ db.bookDao().insert(b.copy(title=et1.text.toString(), author=et2.text.toString())); withContext(Dispatchers.Main){ load() } }}.show() }
-    private fun httpGet(u: String): String?{ return try{ val c=URL(u).openConnection() as HttpURLConnection; c.setRequestProperty("User-Agent","Mozilla/5.0"); c.connectTimeout=15000; c.readTimeout=15000; c.inputStream.bufferedReader().readText() }catch(e:Exception){ null } }
-
-    private fun fetchAndSave(isbn: String, onDone:()->Unit={}){
-        lifecycleScope.launch(Dispatchers.IO){
-            var title=""; var author=""; var cover=""; var found=false
-            try{
-                val gb=httpGet("https://www.googleapis.com/books/v1/volumes?q=isbn:"+isbn)
-                if(gb!=null){
-                    val root=JSONObject(gb)
-                    if(root.optInt("totalItems",0)>0){
-                        val volume=root.getJSONArray("items").getJSONObject(0).getJSONObject("volumeInfo")
-                        title=volume.optString("title")
-                        if(volume.has("authors")){ author=volume.getJSONArray("authors").optString(0) }
-                        if(volume.has("imageLinks")){
-                            val img=volume.getJSONObject("imageLinks")
-                            cover=img.optString("thumbnail")
-                            cover=cover.replace("http:","https:")
-                        }
-                        if(title.isNotEmpty()) found=true
-                    }
-                }
-            }catch(e:Exception){}
-            if(!found){
-                try{
-                    val b1=httpGet("https://openlibrary.org/api/books?bibkeys=ISBN:"+isbn+"&format=json&jscmd=data")
-                    if(b1!=null){
-                        val j=JSONObject(b1)
-                        val key="ISBN:"+isbn
-                        if(j.has(key)){
-                            val d=j.getJSONObject(key)
-                            title=d.optString("title")
-                            if(d.has("authors")){ author=d.getJSONArray("authors").getJSONObject(0).optString("name") }
-                            cover="https://covers.openlibrary.org/b/isbn/"+isbn+"-L.jpg"
-                            if(title.isNotEmpty()) found=true
-                        }
-                    }
-                }catch(e:Exception){}
+@Database(entities = [Book::class], version = 3, exportSchema = false)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun bookDao(): BookDao
+    companion object {
+        @Volatile private var INSTANCE: AppDatabase? = null
+        fun getDatabase(context: Context): AppDatabase {
+            return INSTANCE ?: synchronized(this) {
+                val instance = Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, "doudy_librairie_db").fallbackToDestructiveMigration().build()
+                INSTANCE = instance
+                instance
             }
-            if(cover.isEmpty()){ cover="https://covers.openlibrary.org/b/isbn/"+isbn+"-L.jpg" }
-            if(title.isEmpty()){ title="Livre "+isbn }
-            val book=Book(isbn, title, author, cover=cover)
-            db.bookDao().insert(book)
-            withContext(Dispatchers.Main){ load(); Toast.makeText(this@MainActivity,"Ajouté: "+title,Toast.LENGTH_SHORT).show(); onDone() }
         }
     }
-
-    private fun importCsvFile(uri: Uri){ lifecycleScope.launch(Dispatchers.IO){ try{ val t=contentResolver.openInputStream(uri)?.bufferedReader()?.readText()?: return@launch; var c=0; t.lines().drop(1).forEach{ if(it.isNotBlank()){ val p=it.split(","); if(p.size>=2){ db.bookDao().insert(Book(p[0].trim().replace("\"",""), p[1].trim().replace("\"",""))); c++ } } }; withContext(Dispatchers.Main){ load() } }catch(e:Exception){} } }
-    private fun exportCsv(){ lifecycleScope.launch(Dispatchers.IO){ val csv=buildString{ appendLine("ISBN,Titre,Auteur"); allBooks.forEach{ appendLine(it.isbn+","+it.title+","+it.author) } }; try{ val file=File(getExternalFilesDir(null),"doudy.csv"); file.writeText(csv); withContext(Dispatchers.Main){ Toast.makeText(this@MainActivity,"Exporté",Toast.LENGTH_LONG).show() } }catch(e:Exception){} } }
 }
 
-class BookAdapter(var books: List<Book>): RecyclerView.Adapter<BookAdapter.VH>(){
-    class VH(val view: View, val img: ImageView, val t1: TextView, val t2: TextView): RecyclerView.ViewHolder(view)
-    override fun onCreateViewHolder(p: ViewGroup, vt: Int): VH {
-        val card=androidx.cardview.widget.CardView(p.context).apply{ radius=24f; cardElevation=8f; setCardBackgroundColor(0xFF2C2823.toInt()); layoutParams=RecyclerView.LayoutParams(-1,-2).apply{ setMargins(24,12,24,12) }; setContentPadding(16,16,16,16) }
-        val row=LinearLayout(p.context).apply{ orientation=LinearLayout.HORIZONTAL }
-        val img=ImageView(p.context).apply{ layoutParams=LinearLayout.LayoutParams(120,180).apply{ setMargins(0,0,20,0) }; scaleType=ImageView.ScaleType.CENTER_CROP }
-        val col=LinearLayout(p.context).apply{ orientation=LinearLayout.VERTICAL; layoutParams=LinearLayout.LayoutParams(0,-2,1f) }
-        val t1=TextView(p.context).apply{ textSize=16f; setTextColor(0xFFE8D5B5.toInt()); setTypeface(null, android.graphics.Typeface.BOLD) }
-        val t2=TextView(p.context).apply{ textSize=13f; setTextColor(0xFF8C7A65.toInt()) }
-        col.addView(t1); col.addView(t2); row.addView(img); row.addView(col); card.addView(row)
-        return VH(card,img,t1,t2)
-    }
-    override fun getItemCount()=books.size
-    override fun onBindViewHolder(h: VH, pos: Int){
-        val b=books[pos]; h.t1.text=b.title; h.t2.text=b.author+" - "+b.isbn
-        if(b.cover.isNotEmpty()){ h.img.load(b.cover) } else { h.img.setImageResource(android.R.drawable.ic_menu_gallery) }
-        h.view.setOnClickListener{ (h.view.context as MainActivity).editBook(b) }
-        h.view.setOnLongClickListener{ (h.view.context as MainActivity).deleteBook(b); true }
+private val LibraryWarmBackground = Color(0xFFFAF6F0)
+private val LibraryPrimary = Color(0xFF6B3E2E)
+private val LibrarySecondary = Color(0xFF8C5A47)
+private val LibraryAccent = Color(0xFFD97736)
+private val LibraryCardBg = Color(0xFFFFFFFF)
+
+@Composable
+fun DoudyTheme(content: @Composable () -> Unit) {
+    val colorScheme = lightColorScheme(primary = LibraryPrimary, secondary = LibrarySecondary, tertiary = LibraryAccent, background = LibraryWarmBackground, surface = LibraryCardBg)
+    MaterialTheme(colorScheme = colorScheme, content = content)
+}
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val db = AppDatabase.getDatabase(this)
+        val bookDao = db.bookDao()
+        setContent { DoudyTheme { MainScreen(bookDao) } }
     }
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MainScreen(bookDao: BookDao) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val booksState by bookDao.getAllBooks().collectAsState(initial = emptyList())
+    var selectedTab by remember { mutableStateOf(0) }
+    var searchQuery by remember { mutableStateOf("") }
+    var showMenu by remember { mutableStateOf(false) }
+    var selectedBookForDetail by remember { mutableStateOf<Book?>(null) }
+
+    val exportJsonLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri -> uri?.let { exportDataToJson(context, booksState, it) } }
+    val exportCsvLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri -> uri?.let { exportDataToCsv(context, booksState, it) } }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { scope.launch { val c = importDataFromUri(context, bookDao, it); Toast.makeText(context, "$c livre(s) importé(s)", Toast.LENGTH_SHORT).show() } } }
+
+    val countAll = booksState.size
+    val countALire = remember(booksState) { booksState.count { it.status == "À lire" } }
+    val countEnCours = remember(booksState) { booksState.count { it.status == "En cours" } }
+    val countLu = remember(booksState) { booksState.count { it.status == "Lu" } }
+    val categories = listOf("Tous ($countAll)", "À lire ($countALire)", "En cours ($countEnCours)", "Lu ($countLu)")
+
+    val filteredBooks = remember(booksState, selectedTab, searchQuery) {
+        val tabFiltered = when (selectedTab) { 1 -> booksState.filter { it.status == "À lire" }; 2 -> booksState.filter { it.status == "En cours" }; 3 -> booksState.filter { it.status == "Lu" }; else -> booksState }
+        if (searchQuery.isBlank()) tabFiltered else { val q = searchQuery.trim().lowercase(); tabFiltered.filter { it.title.lowercase().contains(q) || it.authors.lowercase().contains(q) || it.description.lowercase().contains(q) || it.isbn.contains(q) } }
+    }
+
+    var showScanner by remember { mutableStateOf(false) }
+    var showManualDialog by remember { mutableStateOf(false) }
+    var initialIsbnForDialog by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(false) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(title = { Text("📖 Doudy Librairie", fontWeight = FontWeight.Bold, color = Color.White) },
+                actions = {
+                    IconButton(onClick = { showMenu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Menu", tint = Color.White) }
+                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        DropdownMenuItem(text = { Text("Exporter en JSON") }, onClick = { showMenu = false; exportJsonLauncher.launch("bibliotheque_doudy.json") })
+                        DropdownMenuItem(text = { Text("Exporter en CSV") }, onClick = { showMenu = false; exportCsvLauncher.launch("bibliotheque_doudy.csv") })
+                        HorizontalDivider()
+                        DropdownMenuItem(text = { Text("Importer (CSV ou JSON)") }, onClick = { showMenu = false; importLauncher.launch(arrayOf("application/json", "text/csv", "text/comma-separated-values", "*/*")) })
+                    }
+                }, colors = TopAppBarDefaults.topAppBarColors(containerColor = LibraryPrimary))
+        },
+        floatingActionButton = {
+            Column(horizontalAlignment = Alignment.End) {
+                SmallFloatingActionButton(onClick = { initialIsbnForDialog = ""; showManualDialog = true }, containerColor = LibrarySecondary, contentColor = Color.White, modifier = Modifier.padding(bottom = 8.dp)) { Icon(Icons.Default.Edit, contentDescription = "Ajout manuel") }
+                ExtendedFloatingActionButton(onClick = { showScanner = true }, containerColor = LibraryAccent, contentColor = Color.White, shape = RoundedCornerShape(16.dp), icon = { Icon(Icons.Default.Add, contentDescription = null) }, text = { Text("Scanner un livre", fontWeight = FontWeight.Bold) })
+            }
+        }, containerColor = LibraryWarmBackground
+    ) { innerPadding ->
+        Column(modifier = Modifier.padding(innerPadding)) {
+            OutlinedTextField(value = searchQuery, onValueChange = { searchQuery = it }, modifier = Modifier.fillMaxWidth().padding(16.dp, 8.dp), placeholder = { Text("Rechercher...") }, leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Recherche", tint = LibraryPrimary) }, trailingIcon = { if (searchQuery.isNotEmpty()) { IconButton(onClick = { searchQuery = "" }) { Icon(Icons.Default.Clear, contentDescription = "Effacer", tint = Color.Gray) } } }, singleLine = true, shape = RoundedCornerShape(12.dp), colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = LibraryAccent, unfocusedBorderColor = LibrarySecondary.copy(alpha = 0.5f), focusedContainerColor = LibraryCardBg, unfocusedContainerColor = LibraryCardBg))
+            TabRow(selectedTabIndex = selectedTab, containerColor = LibraryWarmBackground, contentColor = LibraryPrimary) { categories.forEachIndexed { index, title -> Tab(selected = selectedTab == index, onClick = { selectedTab = index }, text = { Text(text = title, fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal, fontSize = 12.sp) }) } }
+            Box(modifier = Modifier.fillMaxSize()) {
+                if (isLoading) { Box(Modifier.fillMaxSize(), Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally) { CircularProgressIndicator(color = LibraryAccent); Spacer(Modifier.height(12.dp)); Text("Recherche du livre...", color = LibraryPrimary) } } }
+                else if (showScanner) {
+                    CameraScannerView(onIsbnScanned = { rawIsbn ->
+                        showScanner = false; val cleanIsbn = rawIsbn.filter { it.isDigit() }; isLoading = true
+                        scope.launch { val book = fetchBookDetails(cleanIsbn); isLoading = false; if (book != null) { bookDao.insertBook(book); withContext(Dispatchers.Main) { Toast.makeText(context, "📚 Ajouté : ${book.title}", Toast.LENGTH_SHORT).show() } } else { withContext(Dispatchers.Main) { Toast.makeText(context, "Introuvable. Saisie manuelle.", Toast.LENGTH_LONG).show(); initialIsbnForDialog = cleanIsbn; showManualDialog = true } } }
+                    }, onClose = { showScanner = false })
+                } else {
+                    BookList(books = filteredBooks, searchQuery = searchQuery, onBookClick = { book -> selectedBookForDetail = book }, onStatusChange = { book, newStatus -> scope.launch { bookDao.insertBook(book.copy(status = newStatus)) } }, onDelete = { book -> scope.launch { bookDao.deleteBook(book) } })
+                }
+                if (showManualDialog) { ManualAddDialog(initialIsbn = initialIsbnForDialog, onDismiss = { showManualDialog = false }, onAdd = { isbn, title, author, description, status -> showManualDialog = false; scope.launch { val finalIsbn = if (isbn.isBlank()) System.currentTimeMillis().toString() else isbn; val finalTitle = if (title.isBlank()) "Livre $finalIsbn" else title; val finalAuthor = if (author.isBlank()) "Auteur inconnu" else author; bookDao.insertBook(Book(isbn = finalIsbn, title = finalTitle, authors = finalAuthor, description = description, status = status, coverUrl = if(finalIsbn.length>10) "https://covers.openlibrary.org/b/isbn/$finalIsbn-L.jpg" else "")) } }) }
+                selectedBookForDetail?.let { book -> BookDetailDialog(book = book, onDismiss = { selectedBookForDetail = null }, onSave = { updatedBook -> selectedBookForDetail = null; scope.launch { bookDao.insertBook(updatedBook) } }, onDelete = { selectedBookForDetail = null; scope.launch { bookDao.deleteBook(book) } }) }
+            }
+        }
+    }
+}
+
+@Composable
+fun BookList(books: List<Book>, searchQuery: String, onBookClick: (Book) -> Unit, onStatusChange: (Book, String) -> Unit, onDelete: (Book) -> Unit) {
+    if (books.isEmpty()) { Box(Modifier.fillMaxSize(), Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Text(if (searchQuery.isNotEmpty()) "🔍" else "📚", fontSize = 64.sp); Spacer(Modifier.height(16.dp)); Text(text = if (searchQuery.isNotEmpty()) "Aucun résultat pour \"$searchQuery\"" else "Aucun livre", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = LibraryPrimary) } } }
+    else { androidx.compose.foundation.lazy.LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { items(books) { book -> BookCard(book = book, onClick = { onBookClick(book) }, onStatusChange = { newStatus -> onStatusChange(book, newStatus) }, onDelete = { onDelete(book) }) } } }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BookCard(book: Book, onClick: () -> Unit, onStatusChange: (String) -> Unit, onDelete: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val statuses = listOf("À lire", "En cours", "Lu")
+    val (chipBg, chipText) = when (book.status) { "Lu" -> Color(0xFFE8F5E9) to Color(0xFF2E7D32); "En cours" -> Color(0xFFFFF3E0) to Color(0xFFE65100); else -> Color(0xFFE3F2FD) to Color(0xFF1565C0) }
+    Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(4.dp), modifier = Modifier.fillMaxWidth().clickable {
