@@ -1,9 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/rootLayout" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#1A1612">
-    <!-- Fond perso -->
     <ImageView android:id="@+id/bgImage" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="centerCrop" android:visibility="gone"/>
     <View android:id="@+id/bgOverlay" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#AA1A1612" android:visibility="gone"/>
-
     <LinearLayout android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent">
         <LinearLayout android:id="@+id/headerLayout" android:orientation="vertical" android:layout_width="match_parent" android:layout_height="wrap_content" android:background="#2D241E" android:padding="16dp">
             <TextView android:id="@+id/title" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="📚 MA BIBLIOTHEQUE" android:textSize="24sp" android:textStyle="bold" android:textColor="#F5E6D3" android:fontFamily="serif"/>
