@@ -23,8 +23,9 @@ import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.json.JSONObject
-import java.net.URL
 
 @Entity
 data class Book(@PrimaryKey val isbn: String, val title: String, val author: String="", val cover: String="", val dateAdded: Long=System.currentTimeMillis())
@@ -64,25 +65,23 @@ class MainActivity: AppCompatActivity(){
     private lateinit var db: AppDatabase
     private lateinit var adapter: BookAdapter
     private var allBooks: List<Book> = emptyList()
+    private val client = OkHttpClient()
     private val scanLauncher = registerForActivityResult(ScanContract()){ r-> if(r.contents!=null) fetchAndSave(r.contents) }
 
     override fun onCreate(savedInstanceState: Bundle?){
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        // IMPORTANT on garde la même base que ton screen à 3 livres
         db = Room.databaseBuilder(this, AppDatabase::class.java, "doudy-v11").fallbackToDestructiveMigration().build()
         adapter = BookAdapter(emptyList(),
-            onDelete={ b-> AlertDialog.Builder(this).setTitle("Supprimer?").setMessage(b.title)
-             .setPositiveButton("Oui"){_,_-> lifecycleScope.launch{ db.bookDao().delete(b); load() }}.setNegativeButton("Non",null).show()},
+            onDelete={ b-> AlertDialog.Builder(this).setTitle("Supprimer?").setMessage(b.title).setPositiveButton("Oui"){_,_-> lifecycleScope.launch{ db.bookDao().delete(b); load() }}.setNegativeButton("Non",null).show()},
             onEdit={ b-> editDialog(b) }
         )
         findViewById<RecyclerView>(R.id.recycler).layoutManager=LinearLayoutManager(this)
         findViewById<RecyclerView>(R.id.recycler).adapter=adapter
-
         findViewById<Button>(R.id.btnScan).setOnClickListener{
             val options = ScanOptions()
-            options.setDesiredBarcodeFormats(ScanOptions.EAN_13)
-            options.setPrompt("Scanne en portrait")
+            options.setDesiredBarcodeFormats(ScanOptions.EAN_13, ScanOptions.EAN_8)
+            options.setPrompt("Portrait - vise le code")
             options.setBeepEnabled(true)
             options.setOrientationLocked(true)
             options.setCaptureActivity(MyCaptureActivity::class.java)
@@ -91,45 +90,80 @@ class MainActivity: AppCompatActivity(){
         findViewById<Button>(R.id.btnExport).setOnClickListener{ exportCsv() }
         findViewById<EditText>(R.id.search).addTextChangedListener{ t->
             val q=t.toString().lowercase()
-            val filtered = if(q.isEmpty()) allBooks else allBooks.filter{ it.title.lowercase().contains(q) || it.isbn.contains(q) }
-            adapter.books=filtered; adapter.notifyDataSetChanged()
+            adapter.books = if(q.isEmpty()) allBooks else allBooks.filter{ it.title.lowercase().contains(q) || it.author.lowercase().contains(q) || it.isbn.contains(q) }
+            adapter.notifyDataSetChanged()
         }
         load()
     }
-    private fun load(){
-        lifecycleScope.launch{
-            allBooks = withContext(Dispatchers.IO){ db.bookDao().getAll() }
-            adapter.books=allBooks; adapter.notifyDataSetChanged()
-            findViewById<TextView>(R.id.title).text="Ma Librairie - ${allBooks.size} livres"
-            if(allBooks.isEmpty()) Toast.makeText(this@MainActivity,"Base vide, rescanne tes livres",Toast.LENGTH_LONG).show()
-        }
-    }
+
+    private fun load(){ lifecycleScope.launch{ allBooks = withContext(Dispatchers.IO){ db.bookDao().getAll() }; adapter.books=allBooks; adapter.notifyDataSetChanged(); findViewById<TextView>(R.id.title).text="Ma Librairie - ${allBooks.size} livres" } }
+
     private fun editDialog(b: Book){
         val edit=EditText(this).apply{ setText(b.title) }
-        AlertDialog.Builder(this).setTitle("Editer").setView(edit)
-    .setPositiveButton("Sauver"){_,_->
-            lifecycleScope.launch(Dispatchers.IO){ db.bookDao().insert(b.copy(title=edit.text.toString())); withContext(Dispatchers.Main){ load() } }
-        }.show()
+        AlertDialog.Builder(this).setTitle("Corriger titre").setView(edit).setPositiveButton("Sauver"){_,_-> lifecycleScope.launch(Dispatchers.IO){ db.bookDao().insert(b.copy(title=edit.text.toString())); withContext(Dispatchers.Main){ load() } } }.show()
     }
+
+    private fun httpGet(url: String): String? {
+        return try{
+            val req = Request.Builder().url(url).header("User-Agent","Mozilla/5.0 (Android) Doudy-Librairie").build()
+            client.newCall(req).execute().use{ it.body?.string() }
+        }catch(e: Exception){ null }
+    }
+
     private fun fetchAndSave(isbn: String){
         lifecycleScope.launch(Dispatchers.IO){
-            var title="Livre $isbn"; var author=""; var cover=""; var found=false
-            try{
-                val j=JSONObject(URL("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn").readText())
-                if(j.optInt("totalItems",0)>0){
-                    val vi=j.getJSONArray("items").getJSONObject(0).getJSONObject("volumeInfo")
-                    title=vi.optString("title",title)
-                    author=vi.optJSONArray("authors")?.getString(0)?: ""
-                    cover=vi.optJSONObject("imageLinks")?.optString("thumbnail","")?: ""
-                    found=true
+            var title=""; var author=""; var cover=""; var found=false
+
+            // 1 - Google Books comme Bookshelf
+            httpGet("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn")?.let{ body ->
+                try{
+                    val j=JSONObject(body)
+                    if(j.optInt("totalItems",0)>0){
+                        val vi=j.getJSONArray("items").getJSONObject(0).getJSONObject("volumeInfo")
+                        title=vi.optString("title","")
+                        author=vi.optJSONArray("authors")?.optString(0)?: ""
+                        cover=vi.optJSONObject("imageLinks")?.optString("thumbnail","")?: ""
+                        if(title.isNotEmpty()) found=true
+                    }
+                }catch(_:Exception){}
+            }
+            // 2 - OpenLibrary fallback (c'est ce que Bookshelf utilise aussi)
+            if(!found){
+                httpGet("https://openlibrary.org/api/books?bibkeys=ISBN:$isbn&format=json&jscmd=data")?.let{ body ->
+                    try{
+                        val j=JSONObject(body)
+                        if(j.has("ISBN:$isbn")){
+                            val d=j.getJSONObject("ISBN:$isbn")
+                            title=d.optString("title","")
+                            author=d.optJSONArray("authors")?.getJSONObject(0)?.optString("name","")?: ""
+                            cover=d.optJSONObject("cover")?.optString("medium","")?: "https://covers.openlibrary.org/b/isbn/$isbn-M.jpg"
+                            if(title.isNotEmpty()) found=true
+                        }
+                    }catch(_:Exception){}
                 }
-            }catch(_:Exception){}
-            if(isbn=="9791028128623"){ title="Projet dernière chance"; author="Andy Weir"; found=true }
+            }
+            // 3 - OpenLibrary direct
+            if(!found){
+                httpGet("https://openlibrary.org/isbn/$isbn.json")?.let{ body ->
+                    try{
+                        val j=JSONObject(body)
+                        title=j.optString("title","")
+                        if(title.isNotEmpty()) found=true
+                    }catch(_:Exception){}
+                }
+            }
+
+            if(!found) title="Livre $isbn (non trouvé)"
             val book=Book(isbn=isbn, title=title, author=author, cover=cover.replace("http://","https://"))
             db.bookDao().insert(book)
-            withContext(Dispatchers.Main){ load() }
+            withContext(Dispatchers.Main){
+                load()
+                if(found) Toast.makeText(this@MainActivity,"Trouvé: $title",Toast.LENGTH_SHORT).show()
+                else { Toast.makeText(this@MainActivity,"ISBN $isbn non trouvé, édite",Toast.LENGTH_LONG).show(); editDialog(book) }
+            }
         }
     }
+
     private fun exportCsv(){
         lifecycleScope.launch(Dispatchers.IO){
             val csv = buildString{ appendLine("ISBN,Titre,Auteur"); allBooks.forEach{ appendLine("${it.isbn},\"${it.title}\",\"${it.author}\"") } }
