@@ -33,11 +33,11 @@ import java.net.URL
 object ThemeManager{
     data class Theme(val bg: Int, val header: Int, val card: Int, val text: Int, val sub: Int, val accent: Int)
     val themes = mapOf(
-        "Nuit" to Theme(0xFF1A1612.toInt(), 0xFF2D241E.toInt(), 0xFF2D241E.toInt(), 0xFFF5E6D3.toInt(), 0xFFB8A99A.toInt(), 0xFFD4AF37.toInt()),
-        "Papier" to Theme(0xFFFDF6E3.toInt(), 0xFFF5E0B3.toInt(), 0xFFFFFFFF.toInt(), 0xFF3D2B1F.toInt(), 0xFF8B7355.toInt(), 0xFFA0522D.toInt()),
-        "Velours" to Theme(0xFF1B2F23.toInt(), 0xFF2A4A35.toInt(), 0xFF2A4A35.toInt(), 0xFFE8F5E9.toInt(), 0xFFA5D6A7.toInt(), 0xFF66BB6A.toInt()),
-        "Clair" to Theme(0xFFF5F5F7.toInt(), 0xFFFFFFFF.toInt(), 0xFFFFFFFF.toInt(), 0xFF000000.toInt(), 0xFF666666.toInt(), 0xFF6200EE.toInt()),
-        "Midnight" to Theme(0xFF0F172A.toInt(), 0xFF1E293B.toInt(), 0xFFF1F5F9.toInt(), 0xFF94A3B8.toInt(), 0xFF38BDF8.toInt()),
+        "Nuit" to Theme(-15061582, -13948130, -13948130, -667397, -4535894, -2937049),
+        "Papier" to Theme(-131083, -1048573, -1, -12961121, -7606395, -6287379),
+        "Velours" to Theme(-14928157, -13878205, -13878205, -1503207, -5855577, -10053398),
+        "Clair" to Theme(-657931, -1, -1, -16777216, -10066330, -10354406),
+        "Midnight" to Theme(-15649494, -14737605, -14737605, -914161, -7052744, -12829640)
     )
 }
 
