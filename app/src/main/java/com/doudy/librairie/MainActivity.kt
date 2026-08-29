@@ -37,7 +37,7 @@ object ThemeManager{
         "Papier" to Theme(0xFFFDF6E3.toInt(), 0xFFF5E0B3.toInt(), 0xFFFFFFFF.toInt(), 0xFF3D2B1F.toInt(), 0xFF8B7355.toInt(), 0xFFA0522D.toInt()),
         "Velours" to Theme(0xFF1B2F23.toInt(), 0xFF2A4A35.toInt(), 0xFF2A4A35.toInt(), 0xFFE8F5E9.toInt(), 0xFFA5D6A7.toInt(), 0xFF66BB6A.toInt()),
         "Clair" to Theme(0xFFF5F5F7.toInt(), 0xFFFFFFFF.toInt(), 0xFFFFFFFF.toInt(), 0xFF000000.toInt(), 0xFF666666.toInt(), 0xFF6200EE.toInt()),
-        "Midnight" to Theme(0xFF0F172A.toInt(), 0xFF1E293B.toInt(), 0xFFF1F5F9.toInt(), 0xFF94A3B8.toInt(), 0xFF38BDF8.toInt())
+        "Midnight" to Theme(0xFF0F172A.toInt(), 0xFF1E293B.toInt(), 0xFFF1F5F9.toInt(), 0xFF94A3B8.toInt(), 0xFF38BDF8.toInt()),
     )
 }
 
