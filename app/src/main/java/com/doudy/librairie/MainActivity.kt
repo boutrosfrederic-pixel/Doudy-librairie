@@ -1,5 +1,8 @@
 package com.doudy.librairie
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
@@ -51,7 +54,11 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.net.HttpURLConnection
 import java.net.URL
+
+// 🔑 Renseignez votre clé API ISBNdb ici (optionnel, laissez vide si vous n'en avez pas)
+private const val ISBNDB_API_KEY = ""
 
 // ==========================================
 // 1. BASE DE DONNÉES ROOM
@@ -127,7 +134,7 @@ fun MainScreen(dao: BookDao) {
     var showScan by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
 
-    // Amélioration : Groupement par série et tri par numéro de tome
+    // Groupement par série et tri par numéro de tome
     val groupedBooks = remember(books, searchQuery) {
         val filtered = if (searchQuery.isBlank()) books
         else books.filter {
@@ -136,7 +143,7 @@ fun MainScreen(dao: BookDao) {
             it.series.contains(searchQuery, ignoreCase = true) ||
             it.isbn.contains(searchQuery)
         }
-        
+
         filtered.groupBy { 
             if (it.series.isNotBlank()) it.series else extractSeriesFromTitle(it.title) 
         }.mapValues { (_, seriesList) ->
@@ -147,7 +154,7 @@ fun MainScreen(dao: BookDao) {
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
             scope.launch {
-                val count = importBooksFromCsv(context, uri, dao)
+                val count = importBooksFromCsv(context, it, dao)
                 Toast.makeText(context, "$count livre(s) importé(s)", Toast.LENGTH_SHORT).show()
             }
         }
@@ -156,7 +163,7 @@ fun MainScreen(dao: BookDao) {
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri: Uri? ->
         uri?.let {
             scope.launch {
-                val success = exportBooksToCsv(context, uri, books)
+                val success = exportBooksToCsv(context, it, books)
                 Toast.makeText(context, if (success) "Exportation réussie" else "Erreur d'exportation", Toast.LENGTH_SHORT).show()
             }
         }
@@ -201,25 +208,25 @@ fun MainScreen(dao: BookDao) {
             floatingActionButton = {
                 ExtendedFloatingActionButton(
                     text = { Text("Scanner un livre") },
-                    icon = { Icon(Icons.Filled.Add, null) },
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
                     onClick = {
-                        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                             showScan = true
                         } else {
-                            activity.requestPermissions(arrayOf(android.Manifest.permission.CAMERA), 101)
+                            activity.requestPermissions(arrayOf(Manifest.permission.CAMERA), 101)
                         }
                     }
                 )
             }
         ) { pad ->
             Column(Modifier.fillMaxSize().padding(pad)) {
-                
+
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                     placeholder = { Text("Rechercher un titre, série, auteur...") },
-                    leadingIcon = { Icon(Icons.Filled.Search, null) },
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp)
                 )
@@ -431,7 +438,7 @@ fun extractVolumeNumber(title: String): Int {
     return match?.groupValues?.get(1)?.toIntOrNull() ?: 999
 }
 
-suspend fun importBooksFromCsv(context: android.content.Context, uri: Uri, dao: BookDao): Int = withContext(Dispatchers.IO) {
+suspend fun importBooksFromCsv(context: Context, uri: Uri, dao: BookDao): Int = withContext(Dispatchers.IO) {
     val importedBooks = mutableListOf<Book>()
     try {
         context.contentResolver.openInputStream(uri)?.use { inputStream ->
@@ -458,12 +465,7 @@ suspend fun importBooksFromCsv(context: android.content.Context, uri: Uri, dao: 
                             val title = if (titleIdx != -1 && titleIdx < tokens.size && tokens[titleIdx].isNotBlank()) tokens[titleIdx] else "Livre $cleanIsbn"
                             val authors = if (authorsIdx != -1 && authorsIdx < tokens.size && tokens[authorsIdx].isNotBlank()) tokens[authorsIdx] else "Auteur inconnu"
                             val explicitSeries = if (seriesIdx != -1 && seriesIdx < tokens.size) tokens[seriesIdx] else ""
-                            
-                            val coverUrl = if (coverIdx != -1 && coverIdx < tokens.size && tokens[coverIdx].isNotBlank()) {
-                                tokens[coverIdx]
-                            } else {
-                                ""
-                            }
+                            val coverUrl = if (coverIdx != -1 && coverIdx < tokens.size && tokens[coverIdx].isNotBlank()) tokens[coverIdx] else ""
 
                             importedBooks.add(
                                 Book(
@@ -506,7 +508,7 @@ private fun parseCsvLine(line: String, delimiter: String): List<String> {
     return result
 }
 
-suspend fun exportBooksToCsv(context: android.content.Context, uri: Uri, books: List<Book>): Boolean = withContext(Dispatchers.IO) {
+suspend fun exportBooksToCsv(context: Context, uri: Uri, books: List<Book>): Boolean = withContext(Dispatchers.IO) {
     try {
         context.contentResolver.openOutputStream(uri)?.use { outputStream ->
             val builder = StringBuilder("ISBN,Title,Authors,Series,CoverUrl,Status\n")
@@ -522,7 +524,7 @@ suspend fun exportBooksToCsv(context: android.content.Context, uri: Uri, books: 
 }
 
 // ==========================================
-// 6. RECHERCHE EN LIGNE MULTI-APIS
+// 6. RECHERCHE MULTI-APIS (ISBNDB + GOOGLE + OPENLIBRARY)
 // ==========================================
 
 suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
@@ -531,79 +533,115 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
     var cover = ""
     var series = ""
 
-    // 1. Google Books API
-    try {
-        val url = URL("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn")
-        val conn = url.openConnection().apply {
-            connectTimeout = 4000
-            readTimeout = 4000
-        }
-        val jsonStr = conn.getInputStream().bufferedReader().use { it.readText() }
-        val json = JSONObject(jsonStr)
-
-        if (json.optInt("totalItems", 0) > 0) {
-            val info = json.getJSONArray("items").getJSONObject(0).getJSONObject("volumeInfo")
-            title = info.optString("title", "")
-
-            if (info.has("authors")) {
-                val arr = info.getJSONArray("authors")
-                val list = mutableListOf<String>()
-                for (i in 0 until arr.length()) list.add(arr.getString(i))
-                authors = list.joinToString(", ")
+    // 1. Recherche via ISBNDB.com (si la clé API est fournie)
+    if (ISBNDB_API_KEY.isNotBlank()) {
+        try {
+            val url = URL("https://api2.isbndb.com/book/$isbn")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty("Authorization", ISBNDB_API_KEY)
+                connectTimeout = 4000
+                readTimeout = 4000
             }
 
-            if (info.has("imageLinks")) {
-                val images = info.getJSONObject("imageLinks")
-                cover = images.optString("thumbnail", "")
-                    .ifEmpty { images.optString("smallThumbnail", "") }
-                    .replace("http:", "https:")
+            if (conn.responseCode == 200) {
+                val jsonStr = conn.inputStream.bufferedReader().use { it.readText() }
+                val json = JSONObject(jsonStr)
+                if (json.has("book")) {
+                    val bookObj = json.getJSONObject("book")
+                    title = bookObj.optString("title", "")
+
+                    if (bookObj.has("authors")) {
+                        val arr = bookObj.getJSONArray("authors")
+                        val list = mutableListOf<String>()
+                        for (i in 0 until arr.length()) list.add(arr.getString(i))
+                        authors = list.joinToString(", ")
+                    }
+
+                    cover = bookObj.optString("image", "")
+                }
             }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-    } catch (e: Exception) {
-        e.printStackTrace()
     }
 
-    // 2. OpenLibrary API en secours
-    try {
-        val url = URL("https://openlibrary.org/api/books?bibkeys=ISBN:$isbn&jscmd=data&format=json")
-        val conn = url.openConnection().apply {
-            connectTimeout = 4000
-            readTimeout = 4000
-        }
-        val jsonStr = conn.getInputStream().bufferedReader().use { it.readText() }
-        val json = JSONObject(jsonStr)
-
-        if (json.has("ISBN:$isbn")) {
-            val bookObj = json.getJSONObject("ISBN:$isbn")
-
-            if (title.isBlank()) {
-                title = bookObj.optString("title", "")
+    // 2. Google Books API (en cas d'absence ou d'échec ISBNDB)
+    if (title.isBlank()) {
+        try {
+            val url = URL("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn")
+            val conn = url.openConnection().apply {
+                connectTimeout = 4000
+                readTimeout = 4000
             }
+            val jsonStr = conn.getInputStream().bufferedReader().use { it.readText() }
+            val json = JSONObject(jsonStr)
 
-            if (authors.isBlank() && bookObj.has("authors")) {
-                val authorsArr = bookObj.getJSONArray("authors")
-                val list = mutableListOf<String>()
-                for (i in 0 until authorsArr.length()) {
-                    list.add(authorsArr.getJSONObject(i).optString("name"))
+            if (json.optInt("totalItems", 0) > 0) {
+                val info = json.getJSONArray("items").getJSONObject(0).getJSONObject("volumeInfo")
+                title = info.optString("title", "")
+
+                if (info.has("authors")) {
+                    val arr = info.getJSONArray("authors")
+                    val list = mutableListOf<String>()
+                    for (i in 0 until arr.length()) list.add(arr.getString(i))
+                    authors = list.joinToString(", ")
                 }
-                authors = list.joinToString(", ")
-            }
 
-            if (cover.isBlank() && bookObj.has("cover")) {
-                val coverObj = bookObj.getJSONObject("cover")
-                cover = coverObj.optString("large", "")
-                    .ifEmpty { coverObj.optString("medium", "") }
-                    .ifEmpty { coverObj.optString("small", "") }
-                    .replace("http:", "https:")
+                if (info.has("imageLinks")) {
+                    val images = info.getJSONObject("imageLinks")
+                    cover = images.optString("thumbnail", "")
+                        .ifEmpty { images.optString("smallThumbnail", "") }
+                        .replace("http:", "https:")
+                }
             }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-    } catch (e: Exception) {
-        e.printStackTrace()
+    }
+
+    // 3. OpenLibrary API (en secours final)
+    if (title.isBlank() || authors.isBlank() || cover.isBlank()) {
+        try {
+            val url = URL("https://openlibrary.org/api/books?bibkeys=ISBN:$isbn&jscmd=data&format=json")
+            val conn = url.openConnection().apply {
+                connectTimeout = 4000
+                readTimeout = 4000
+            }
+            val jsonStr = conn.getInputStream().bufferedReader().use { it.readText() }
+            val json = JSONObject(jsonStr)
+
+            if (json.has("ISBN:$isbn")) {
+                val bookObj = json.getJSONObject("ISBN:$isbn")
+
+                if (title.isBlank()) {
+                    title = bookObj.optString("title", "")
+                }
+
+                if (authors.isBlank() && bookObj.has("authors")) {
+                    val authorsArr = bookObj.getJSONArray("authors")
+                    val list = mutableListOf<String>()
+                    for (i in 0 until authorsArr.length()) {
+                        list.add(authorsArr.getJSONObject(i).optString("name"))
+                    }
+                    authors = list.joinToString(", ")
+                }
+
+                if (cover.isBlank() && bookObj.has("cover")) {
+                    val coverObj = bookObj.getJSONObject("cover")
+                    cover = coverObj.optString("large", "")
+                        .ifEmpty { coverObj.optString("medium", "") }
+                        .ifEmpty { coverObj.optString("small", "") }
+                        .replace("http:", "https:")
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     if (title.isBlank()) title = "Livre $isbn"
-    
-    // Auto-détection de secours si l'auteur n'est pas fourni par l'API
+
     if (authors.isBlank() || authors == "Auteur non renseigné") {
         authors = when {
             title.contains("Lore Olympus", ignoreCase = true) -> "Rachel Smythe"
@@ -720,8 +758,8 @@ fun CameraView(onScanned: (String) -> Unit, onClose: () -> Unit) {
                 Button(
                     onClick = onClose,
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                ) { 
-                    Text("Fermer") 
+                ) {
+                    Text("Fermer")
                 }
             }
 
