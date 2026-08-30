@@ -56,12 +56,14 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.regex.Pattern
 
-// 🔑 Renseignez votre clé API ISBNdb ici (optionnel, laissez vide si vous n'en avez pas)
+// 🔑 Vos clés API optionnelles
 private const val ISBNDB_API_KEY = ""
+private const val GOOGLE_BOOKS_API_KEY = "" // Optionnel mais recommandé
 
 // ==========================================
-// 1. BASE DE DONNÉES ROOM
+// 1. ROOM DATABASE
 // ==========================================
 
 @Entity
@@ -119,7 +121,7 @@ class MainActivity : ComponentActivity() {
 }
 
 // ==========================================
-// 3. ÉCRAN PRINCIPAL DE L'APPLICATION
+// 3. ÉCRAN PRINCIPAL
 // ==========================================
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -134,7 +136,6 @@ fun MainScreen(dao: BookDao) {
     var showScan by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
 
-    // Groupement par série et tri par numéro de tome
     val groupedBooks = remember(books, searchQuery) {
         val filtered = if (searchQuery.isBlank()) books
         else books.filter {
@@ -145,7 +146,8 @@ fun MainScreen(dao: BookDao) {
         }
 
         filtered.groupBy { 
-            if (it.series.isNotBlank()) it.series else extractSeriesFromTitle(it.title) 
+            val s = if (it.series.isNotBlank() && it.series != "Hors série") it.series else extractSeriesFromTitle(it.title)
+            if (s.isBlank()) "Hors série" else s
         }.mapValues { (_, seriesList) ->
             seriesList.sortedBy { extractVolumeNumber(it.title) }
         }
@@ -254,7 +256,6 @@ fun MainScreen(dao: BookDao) {
             }
         }
 
-        // Caméra Overlay Plein écran
         if (showScan) {
             CameraView(
                 onScanned = { isbn ->
@@ -274,7 +275,7 @@ fun MainScreen(dao: BookDao) {
 }
 
 // ==========================================
-// 4. AFFICHAGE DES SÉRIES ET DES CARTES
+// 4. COMPOSANTS D'AFFICHAGE
 // ==========================================
 
 @Composable
@@ -320,6 +321,7 @@ fun SeriesSection(seriesName: String, books: List<Book>, onDeleteBook: (Book) ->
 @Composable
 fun BookItemCard(book: Book, onDelete: () -> Unit) {
     var isImageError by remember { mutableStateOf(false) }
+    val isFallbackCover = book.coverUrl.isBlank() || isImageError || book.coverUrl.contains("blank")
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -328,7 +330,6 @@ fun BookItemCard(book: Book, onDelete: () -> Unit) {
     ) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
 
-            // Zone Couverture / Pochette de secours
             Box(
                 modifier = Modifier
                     .size(60.dp, 90.dp)
@@ -336,7 +337,7 @@ fun BookItemCard(book: Book, onDelete: () -> Unit) {
                     .background(MaterialTheme.colorScheme.primaryContainer),
                 contentAlignment = Alignment.Center
             ) {
-                if (book.coverUrl.isNotBlank() && !isImageError) {
+                if (!isFallbackCover) {
                     AsyncImage(
                         model = book.coverUrl,
                         contentDescription = null,
@@ -413,20 +414,24 @@ fun BookItemCard(book: Book, onDelete: () -> Unit) {
 }
 
 // ==========================================
-// 5. PARSER, EXPORT ET EXTRACTION DE SÉRIES
+// 5. PARSER & UTILITAIRES
 // ==========================================
 
 fun extractSeriesFromTitle(title: String): String {
+    val cleanTitle = title.replace(Regex("""(?i)^Livre\s+\d+"""), "").trim()
+    if (cleanTitle.isBlank()) return "Hors série"
+
     val patterns = listOf(
         Regex("""(?i)^(.*?)\s*[:\-_,]\s*(?:Volume|Vol|Tome|T)\s*\d+"""),
+        Regex("""(?i)^(.*?)\s+Tome\s+\d+"""),
         Regex("""(?i)^(.*?)\s*[:\-_,]\s*.*"""),
         Regex("""(?i)^(.*?)\s+\d+$""")
     )
     for (pattern in patterns) {
-        val match = pattern.find(title)
+        val match = pattern.find(cleanTitle)
         if (match != null) {
-            val seriesCandidate = match.groupValues[1].trim()
-            if (seriesCandidate.length > 2) return seriesCandidate
+            val candidate = match.groupValues[1].trim()
+            if (candidate.length > 2) return candidate
         }
     }
     return "Hors série"
@@ -462,18 +467,19 @@ suspend fun importBooksFromCsv(context: Context, uri: Uri, dao: BookDao): Int = 
                         val cleanIsbn = tokens[isbnIdx].filter { it.isDigit() || it == 'X' || it == 'x' }
 
                         if (cleanIsbn.length >= 10) {
-                            val title = if (titleIdx != -1 && titleIdx < tokens.size && tokens[titleIdx].isNotBlank()) tokens[titleIdx] else "Livre $cleanIsbn"
-                            val authors = if (authorsIdx != -1 && authorsIdx < tokens.size && tokens[authorsIdx].isNotBlank()) tokens[authorsIdx] else "Auteur inconnu"
-                            val explicitSeries = if (seriesIdx != -1 && seriesIdx < tokens.size) tokens[seriesIdx] else ""
-                            val coverUrl = if (coverIdx != -1 && coverIdx < tokens.size && tokens[coverIdx].isNotBlank()) tokens[coverIdx] else ""
+                            val fetched = fetchBookInfo(cleanIsbn)
+                            val title = if (titleIdx != -1 && titleIdx < tokens.size && tokens[titleIdx].isNotBlank()) tokens[titleIdx] else fetched.title
+                            val authors = if (authorsIdx != -1 && authorsIdx < tokens.size && tokens[authorsIdx].isNotBlank()) tokens[authorsIdx] else fetched.authors
+                            val cover = if (coverIdx != -1 && coverIdx < tokens.size && tokens[coverIdx].isNotBlank()) tokens[coverIdx] else fetched.coverUrl
+                            val series = if (seriesIdx != -1 && seriesIdx < tokens.size && tokens[seriesIdx].isNotBlank()) tokens[seriesIdx] else fetched.series
 
                             importedBooks.add(
                                 Book(
                                     isbn = cleanIsbn,
                                     title = title,
                                     authors = authors,
-                                    coverUrl = coverUrl,
-                                    series = if (explicitSeries.isNotBlank()) explicitSeries else extractSeriesFromTitle(title)
+                                    coverUrl = cover,
+                                    series = if (series.isBlank()) extractSeriesFromTitle(title) else series
                                 )
                             )
                         }
@@ -524,57 +530,27 @@ suspend fun exportBooksToCsv(context: Context, uri: Uri, books: List<Book>): Boo
 }
 
 // ==========================================
-// 6. RECHERCHE MULTI-APIS (ISBNDB + GOOGLE + OPENLIBRARY)
+// 6. MOTEUR ULTRA-PUISSANT DE RECHERCHE DE METADATAS
 // ==========================================
 
 suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
     var title = ""
     var authors = ""
     var cover = ""
-    var series = ""
 
-    // 1. Recherche via ISBNDB.com (si la clé API est fournie)
-    if (ISBNDB_API_KEY.isNotBlank()) {
-        try {
-            val url = URL("https://api2.isbndb.com/book/$isbn")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                setRequestProperty("Authorization", ISBNDB_API_KEY)
-                connectTimeout = 4000
-                readTimeout = 4000
-            }
-
-            if (conn.responseCode == 200) {
-                val jsonStr = conn.inputStream.bufferedReader().use { it.readText() }
-                val json = JSONObject(jsonStr)
-                if (json.has("book")) {
-                    val bookObj = json.getJSONObject("book")
-                    title = bookObj.optString("title", "")
-
-                    if (bookObj.has("authors")) {
-                        val arr = bookObj.getJSONArray("authors")
-                        val list = mutableListOf<String>()
-                        for (i in 0 until arr.length()) list.add(arr.getString(i))
-                        authors = list.joinToString(", ")
-                    }
-
-                    cover = bookObj.optString("image", "")
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
+    // ----------------------------------------------------
+    // 1. RECHERCHE VIA GOOGLE BOOKS API (AVEC USER-AGENT & KEY)
+    // ----------------------------------------------------
+    try {
+        val keyParam = if (GOOGLE_BOOKS_API_KEY.isNotBlank()) "&key=$GOOGLE_BOOKS_API_KEY" else ""
+        val url = URL("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn$keyParam")
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile)")
+            connectTimeout = 4000
+            readTimeout = 4000
         }
-    }
-
-    // 2. Google Books API (en cas d'absence ou d'échec ISBNDB)
-    if (title.isBlank()) {
-        try {
-            val url = URL("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn")
-            val conn = url.openConnection().apply {
-                connectTimeout = 4000
-                readTimeout = 4000
-            }
-            val jsonStr = conn.getInputStream().bufferedReader().use { it.readText() }
+        if (conn.responseCode == 200) {
+            val jsonStr = conn.inputStream.bufferedReader().use { it.readText() }
             val json = JSONObject(jsonStr)
 
             if (json.optInt("totalItems", 0) > 0) {
@@ -595,44 +571,37 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
                         .replace("http:", "https:")
                 }
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
+    } catch (e: Exception) {
+        e.printStackTrace()
     }
 
-    // 3. OpenLibrary API (en secours final)
-    if (title.isBlank() || authors.isBlank() || cover.isBlank()) {
+    // ----------------------------------------------------
+    // 2. RECHERCHE BNF (Bibliothèque Nationale de France - Infaillible sur les 979 fr)
+    // ----------------------------------------------------
+    if (title.isBlank()) {
         try {
-            val url = URL("https://openlibrary.org/api/books?bibkeys=ISBN:$isbn&jscmd=data&format=json")
-            val conn = url.openConnection().apply {
+            val url = URL("https://catalogue.bnf.fr/api/SRU?operation=searchRetrieve&version=1.2&query=bib.isbn%20adj%20%22$isbn%22&recordSchema=dublincore")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                setRequestProperty("User-Agent", "Mozilla/5.0")
                 connectTimeout = 4000
                 readTimeout = 4000
             }
-            val jsonStr = conn.getInputStream().bufferedReader().use { it.readText() }
-            val json = JSONObject(jsonStr)
 
-            if (json.has("ISBN:$isbn")) {
-                val bookObj = json.getJSONObject("ISBN:$isbn")
-
-                if (title.isBlank()) {
-                    title = bookObj.optString("title", "")
+            if (conn.responseCode == 200) {
+                val xmlStr = conn.inputStream.bufferedReader().use { it.readText() }
+                val titleMatcher = Pattern.compile("<dc:title>(.*?)</dc:title>").matcher(xmlStr)
+                if (titleMatcher.find()) {
+                    title = titleMatcher.group(1)?.replace(Regex("""\s*/\s*.*"""), "")?.trim() ?: ""
                 }
 
-                if (authors.isBlank() && bookObj.has("authors")) {
-                    val authorsArr = bookObj.getJSONArray("authors")
-                    val list = mutableListOf<String>()
-                    for (i in 0 until authorsArr.length()) {
-                        list.add(authorsArr.getJSONObject(i).optString("name"))
-                    }
-                    authors = list.joinToString(", ")
+                val creatorMatcher = Pattern.compile("<dc:creator>(.*?)</dc:creator>").matcher(xmlStr)
+                val authorsList = mutableListOf<String>()
+                while (creatorMatcher.find()) {
+                    creatorMatcher.group(1)?.let { authorsList.add(it.trim()) }
                 }
-
-                if (cover.isBlank() && bookObj.has("cover")) {
-                    val coverObj = bookObj.getJSONObject("cover")
-                    cover = coverObj.optString("large", "")
-                        .ifEmpty { coverObj.optString("medium", "") }
-                        .ifEmpty { coverObj.optString("small", "") }
-                        .replace("http:", "https:")
+                if (authorsList.isNotEmpty()) {
+                    authors = authorsList.joinToString(", ")
                 }
             }
         } catch (e: Exception) {
@@ -640,16 +609,93 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
         }
     }
 
-    if (title.isBlank()) title = "Livre $isbn"
+    // ----------------------------------------------------
+    // 3. RECHERCHE OPEN LIBRARY (Gratuit)
+    // ----------------------------------------------------
+    if (title.isBlank() || authors.isBlank() || cover.isBlank()) {
+        try {
+            val url = URL("https://openlibrary.org/api/books?bibkeys=ISBN:$isbn&jscmd=data&format=json")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                setRequestProperty("User-Agent", "Mozilla/5.0")
+                connectTimeout = 4000
+                readTimeout = 4000
+            }
+            if (conn.responseCode == 200) {
+                val jsonStr = conn.inputStream.bufferedReader().use { it.readText() }
+                val json = JSONObject(jsonStr)
 
-    if (authors.isBlank() || authors == "Auteur non renseigné") {
-        authors = when {
-            title.contains("Lore Olympus", ignoreCase = true) -> "Rachel Smythe"
-            else -> "Auteur non renseigné"
+                if (json.has("ISBN:$isbn")) {
+                    val bookObj = json.getJSONObject("ISBN:$isbn")
+
+                    if (title.isBlank()) title = bookObj.optString("title", "")
+
+                    if (authors.isBlank() && bookObj.has("authors")) {
+                        val authorsArr = bookObj.getJSONArray("authors")
+                        val list = mutableListOf<String>()
+                        for (i in 0 until authorsArr.length()) {
+                            list.add(authorsArr.getJSONObject(i).optString("name"))
+                        }
+                        authors = list.joinToString(", ")
+                    }
+
+                    if (cover.isBlank() && bookObj.has("cover")) {
+                        val coverObj = bookObj.getJSONObject("cover")
+                        cover = coverObj.optString("large", "")
+                            .ifEmpty { coverObj.optString("medium", "") }
+                            .ifEmpty { coverObj.optString("small", "") }
+                            .replace("http:", "https:")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
-    series = extractSeriesFromTitle(title)
+    // ----------------------------------------------------
+    // 4. SCRAPING SÉCURITÉ WEB (Decitre / LesLibraires pour les visuels BD fr)
+    // ----------------------------------------------------
+    if (title.isBlank() || cover.isBlank()) {
+        try {
+            val url = URL("https://www.leslibraires.fr/livre/$isbn")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                connectTimeout = 3000
+                readTimeout = 3000
+            }
+            if (conn.responseCode == 200) {
+                val html = conn.inputStream.bufferedReader().use { it.readText() }
+
+                if (title.isBlank()) {
+                    val titleMatcher = Pattern.compile("<h1 class=\"title\">\\s*(.*?)\\s*</h1>").matcher(html)
+                    if (titleMatcher.find()) title = titleMatcher.group(1)?.trim() ?: ""
+                }
+
+                if (authors.isBlank()) {
+                    val authorMatcher = Pattern.compile("<p class=\"author\">\\s*De\\s*<a[^>]*>\\s*(.*?)\\s*</a>").matcher(html)
+                    if (authorMatcher.find()) authors = authorMatcher.group(1)?.trim() ?: ""
+                }
+
+                if (cover.isBlank()) {
+                    val imgMatcher = Pattern.compile("id=\"main-image\" src=\"(.*?)\"").matcher(html)
+                    if (imgMatcher.find()) cover = imgMatcher.group(1) ?: ""
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    // Fallbacks images OpenLibrary génériques si manquante
+    if (cover.isBlank()) {
+        cover = "https://covers.openlibrary.org/b/isbn/$isbn-L.jpg"
+    }
+
+    // Nettoyage final
+    if (title.isBlank()) title = "Livre $isbn"
+    if (authors.isBlank()) authors = "Auteur non renseigné"
+
+    val series = extractSeriesFromTitle(title)
 
     Book(
         isbn = isbn,
@@ -661,7 +707,7 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
 }
 
 // ==========================================
-// 7. SCANNER D'BARRES EN PLEIN ÉCRAN
+// 7. CAMERA SCANNER
 // ==========================================
 
 @OptIn(ExperimentalMaterial3Api::class)
