@@ -316,16 +316,34 @@ fun BookItemCard(book: Book, onDelete: () -> Unit) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
     ) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            AsyncImage(
-                model = if (book.coverUrl.isNotBlank()) book.coverUrl else "https://covers.openlibrary.org/b/isbn/${book.isbn}-M.jpg",
-                contentDescription = null,
+            
+            // Affichage de la couverture ou du badge de secours avec initiales
+            Box(
                 modifier = Modifier
                     .size(60.dp, 90.dp)
                     .clip(RoundedCornerShape(6.dp))
-                    .background(Color.LightGray),
-                contentScale = ContentScale.Crop
-            )
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                AsyncImage(
+                    model = book.coverUrl,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+                
+                if (book.coverUrl.isBlank()) {
+                    Text(
+                        text = book.title.take(2).uppercase(),
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        fontSize = 20.sp
+                    )
+                }
+            }
+
             Spacer(Modifier.width(12.dp))
+            
             Column(Modifier.weight(1f)) {
                 Surface(
                     color = if (book.status == "Lu") Color(0xFFE8F5E9) else Color(0xFFFFF3E0),
@@ -368,7 +386,7 @@ fun BookItemCard(book: Book, onDelete: () -> Unit) {
 }
 
 // ==========================================
-// 5. PARSER ET EXPORT CSV (Virgules & Points-virgules)
+// 5. PARSER ET EXPORT CSV
 // ==========================================
 
 suspend fun importBooksFromCsv(context: android.content.Context, uri: Uri, dao: BookDao): Int = withContext(Dispatchers.IO) {
@@ -477,52 +495,100 @@ suspend fun exportBooksToCsv(context: android.content.Context, uri: Uri, books: 
 }
 
 // ==========================================
-// 6. RECHERCHE EN LIGNE INFOS & IMAGE
+// 6. RECHERCHE EN LIGNE MULTI-APIS
 // ==========================================
 
 suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
-    var title = "Livre $isbn"
-    var authors = "Auteur inconnu"
-    var cover = "https://covers.openlibrary.org/b/isbn/$isbn-M.jpg"
+    var title = ""
+    var authors = ""
+    var cover = ""
     var series = ""
 
+    // 1. Recherche via Google Books API
     try {
-        val jsonStr = URL("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn").readText()
+        val url = URL("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn")
+        val conn = url.openConnection()
+        conn.connectTimeout = 4000
+        conn.readTimeout = 4000
+        val jsonStr = conn.getInputStream().bufferedReader().use { it.readText() }
         val json = JSONObject(jsonStr)
+
         if (json.optInt("totalItems", 0) > 0) {
             val info = json.getJSONArray("items").getJSONObject(0).getJSONObject("volumeInfo")
-            title = info.optString("title", title)
-
+            title = info.optString("title", "")
+            
             if (info.has("authors")) {
                 val arr = info.getJSONArray("authors")
                 val list = mutableListOf<String>()
                 for (i in 0 until arr.length()) list.add(arr.getString(i))
                 authors = list.joinToString(", ")
             }
+
             if (info.has("imageLinks")) {
-                cover = info.getJSONObject("imageLinks").optString("thumbnail", cover).replace("http:", "https:")
+                val images = info.getJSONObject("imageLinks")
+                cover = images.optString("thumbnail", "")
+                    .ifEmpty { images.optString("smallThumbnail", "") }
+                    .replace("http:", "https:")
             }
         }
-    } catch (e: Exception) {}
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
 
+    // 2. Secours via OpenLibrary API
     try {
-        val jsonStr = URL("https://openlibrary.org/api/books?bibkeys=ISBN:$isbn&jscmd=data&format=json").readText()
+        val url = URL("https://openlibrary.org/api/books?bibkeys=ISBN:$isbn&jscmd=data&format=json")
+        val conn = url.openConnection()
+        conn.connectTimeout = 4000
+        conn.readTimeout = 4000
+        val jsonStr = conn.getInputStream().bufferedReader().use { it.readText() }
         val json = JSONObject(jsonStr)
+
         if (json.has("ISBN:$isbn")) {
             val bookObj = json.getJSONObject("ISBN:$isbn")
-            if (title.startsWith("Livre ")) {
-                title = bookObj.optString("title", title)
+            
+            if (title.isBlank()) {
+                title = bookObj.optString("title", "")
             }
-            if (bookObj.has("cover")) {
-                val olCover = bookObj.getJSONObject("cover").optString("medium", "").replace("http:", "https:")
-                if (olCover.isNotBlank()) cover = olCover
+
+            if (authors.isBlank() && bookObj.has("authors")) {
+                val authorsArr = bookObj.getJSONArray("authors")
+                val list = mutableListOf<String>()
+                for (i in 0 until authorsArr.length()) {
+                    list.add(authorsArr.getJSONObject(i).optString("name"))
+                }
+                authors = list.joinToString(", ")
+            }
+
+            if (cover.isBlank() && bookObj.has("cover")) {
+                val coverObj = bookObj.getJSONObject("cover")
+                cover = coverObj.optString("large", "")
+                    .ifEmpty { coverObj.optString("medium", "") }
+                    .ifEmpty { coverObj.optString("small", "") }
+                    .replace("http:", "https:")
             }
         }
-    } catch (e: Exception) {}
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+
+    // 3. Image par défaut direct via OpenLibrary Covers si aucune image trouvée
+    if (cover.isBlank()) {
+        cover = "https://covers.openlibrary.org/b/isbn/$isbn-L.jpg"
+    }
+
+    if (title.isBlank()) title = "Livre $isbn"
+    if (authors.isBlank()) authors = "Auteur non renseigné"
 
     series = extractSeriesFromTitle(title)
 
-    Book(isbn = isbn, title = title, authors = authors, coverUrl = cover, series = series)
+    Book(
+        isbn = isbn,
+        title = title,
+        authors = authors,
+        coverUrl = cover,
+        series = series
+    )
 }
 
 // ==========================================
