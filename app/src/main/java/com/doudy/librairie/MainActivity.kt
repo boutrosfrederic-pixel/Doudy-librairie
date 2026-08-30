@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -58,12 +59,12 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.regex.Pattern
 
-// 🔑 Vos clés API optionnelles
+// 🔑 Clés d'API facultatives
 private const val ISBNDB_API_KEY = ""
-private const val GOOGLE_BOOKS_API_KEY = "" // Optionnel mais recommandé
+private const val GOOGLE_BOOKS_API_KEY = "" 
 
 // ==========================================
-// 1. ROOM DATABASE
+// 1. ROOM DATABASE (MODÈLE ET DAO)
 // ==========================================
 
 @Entity
@@ -87,6 +88,9 @@ interface BookDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBooks(books: List<Book>)
+
+    @Update
+    suspend fun updateBook(book: Book)
 
     @Delete
     suspend fun deleteBook(book: Book)
@@ -247,7 +251,14 @@ fun MainScreen(dao: BookDao) {
                                 SeriesSection(
                                     seriesName = seriesName,
                                     books = seriesBooks,
-                                    onDeleteBook = { book -> scope.launch { dao.deleteBook(book) } }
+                                    onDeleteBook = { book -> scope.launch { dao.deleteBook(book) } },
+                                    onRefreshBook = { book ->
+                                        scope.launch {
+                                            val updated = fetchBookInfo(book.isbn)
+                                            dao.insertBook(updated)
+                                            Toast.makeText(context, "Mis à jour : ${updated.title}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
                                 )
                             }
                         }
@@ -275,11 +286,16 @@ fun MainScreen(dao: BookDao) {
 }
 
 // ==========================================
-// 4. COMPOSANTS D'AFFICHAGE
+// 4. COMPOSANTS D'AFFICHAGE (CARTE & SÉRIE)
 // ==========================================
 
 @Composable
-fun SeriesSection(seriesName: String, books: List<Book>, onDeleteBook: (Book) -> Unit) {
+fun SeriesSection(
+    seriesName: String, 
+    books: List<Book>, 
+    onDeleteBook: (Book) -> Unit,
+    onRefreshBook: (Book) -> Unit
+) {
     var expanded by remember { mutableStateOf(true) }
     val isStandalone = seriesName == "Hors série" || seriesName.isBlank()
 
@@ -311,7 +327,11 @@ fun SeriesSection(seriesName: String, books: List<Book>, onDeleteBook: (Book) ->
         AnimatedVisibility(visible = expanded || isStandalone) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 books.forEach { book ->
-                    BookItemCard(book = book, onDelete = { onDeleteBook(book) })
+                    BookItemCard(
+                        book = book, 
+                        onDelete = { onDeleteBook(book) },
+                        onRefresh = { onRefreshBook(book) }
+                    )
                 }
             }
         }
@@ -319,8 +339,13 @@ fun SeriesSection(seriesName: String, books: List<Book>, onDeleteBook: (Book) ->
 }
 
 @Composable
-fun BookItemCard(book: Book, onDelete: () -> Unit) {
+fun BookItemCard(
+    book: Book, 
+    onDelete: () -> Unit,
+    onRefresh: () -> Unit
+) {
     var isImageError by remember { mutableStateOf(false) }
+    var isRefreshing by remember { mutableStateOf(false) }
     val isFallbackCover = book.coverUrl.isBlank() || isImageError || book.coverUrl.contains("blank")
 
     Card(
@@ -406,15 +431,41 @@ fun BookItemCard(book: Book, onDelete: () -> Unit) {
                     fontSize = 10.sp
                 )
             }
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Filled.Delete, contentDescription = "Supprimer", tint = Color.Gray)
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isRefreshing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    IconButton(onClick = {
+                        isRefreshing = true
+                        onRefresh()
+                    }) {
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = "Actualiser",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        imageVector = Icons.Filled.Delete,
+                        contentDescription = "Supprimer",
+                        tint = Color.Gray
+                    )
+                }
             }
         }
     }
 }
 
 // ==========================================
-// 5. PARSER & UTILITAIRES
+// 5. PARSER, SÉRIES ET IMPORT/EXPORT CSV
 // ==========================================
 
 fun extractSeriesFromTitle(title: String): String {
@@ -530,7 +581,7 @@ suspend fun exportBooksToCsv(context: Context, uri: Uri, books: List<Book>): Boo
 }
 
 // ==========================================
-// 6. MOTEUR ULTRA-PUISSANT DE RECHERCHE DE METADATAS
+// 6. MOTEUR MULTI-SOURCES METADATAS LIVRES
 // ==========================================
 
 suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
@@ -538,9 +589,7 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
     var authors = ""
     var cover = ""
 
-    // ----------------------------------------------------
-    // 1. RECHERCHE VIA GOOGLE BOOKS API (AVEC USER-AGENT & KEY)
-    // ----------------------------------------------------
+    // 1. GOOGLE BOOKS API
     try {
         val keyParam = if (GOOGLE_BOOKS_API_KEY.isNotBlank()) "&key=$GOOGLE_BOOKS_API_KEY" else ""
         val url = URL("https://www.googleapis.com/books/v1/volumes?q=isbn:$isbn$keyParam")
@@ -576,9 +625,7 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
         e.printStackTrace()
     }
 
-    // ----------------------------------------------------
-    // 2. RECHERCHE BNF (Bibliothèque Nationale de France - Infaillible sur les 979 fr)
-    // ----------------------------------------------------
+    // 2. BNF (Bibliothèque Nationale de France)
     if (title.isBlank()) {
         try {
             val url = URL("https://catalogue.bnf.fr/api/SRU?operation=searchRetrieve&version=1.2&query=bib.isbn%20adj%20%22$isbn%22&recordSchema=dublincore")
@@ -609,9 +656,7 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
         }
     }
 
-    // ----------------------------------------------------
-    // 3. RECHERCHE OPEN LIBRARY (Gratuit)
-    // ----------------------------------------------------
+    // 3. OPEN LIBRARY
     if (title.isBlank() || authors.isBlank() || cover.isBlank()) {
         try {
             val url = URL("https://openlibrary.org/api/books?bibkeys=ISBN:$isbn&jscmd=data&format=json")
@@ -652,9 +697,7 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
         }
     }
 
-    // ----------------------------------------------------
-    // 4. SCRAPING SÉCURITÉ WEB (Decitre / LesLibraires pour les visuels BD fr)
-    // ----------------------------------------------------
+    // 4. SCRAPING SÉCURITÉ WEB (LesLibraires)
     if (title.isBlank() || cover.isBlank()) {
         try {
             val url = URL("https://www.leslibraires.fr/livre/$isbn")
@@ -686,12 +729,7 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
         }
     }
 
-    // Fallbacks images OpenLibrary génériques si manquante
-    if (cover.isBlank()) {
-        cover = "https://covers.openlibrary.org/b/isbn/$isbn-L.jpg"
-    }
-
-    // Nettoyage final
+    // Nettoyage final des valeurs
     if (title.isBlank()) title = "Livre $isbn"
     if (authors.isBlank()) authors = "Auteur non renseigné"
 
@@ -707,7 +745,7 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
 }
 
 // ==========================================
-// 7. CAMERA SCANNER
+// 7. CAMERA SCANNER ML KIT
 // ==========================================
 
 @OptIn(ExperimentalMaterial3Api::class)
