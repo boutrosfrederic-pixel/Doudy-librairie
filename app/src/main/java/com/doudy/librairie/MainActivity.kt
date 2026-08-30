@@ -60,7 +60,6 @@ import java.net.URL
 import java.util.regex.Pattern
 
 // 🔑 Clés d'API facultatives
-private const val ISBNDB_API_KEY = ""
 private const val GOOGLE_BOOKS_API_KEY = "" 
 
 // ==========================================
@@ -139,6 +138,9 @@ fun MainScreen(dao: BookDao) {
     var searchQuery by remember { mutableStateOf("") }
     var showScan by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
+
+    // Enregistre quel livre est en cours de rafraîchissement
+    var refreshingIsbn by remember { mutableStateOf<String?>(null) }
 
     val groupedBooks = remember(books, searchQuery) {
         val filtered = if (searchQuery.isBlank()) books
@@ -251,12 +253,20 @@ fun MainScreen(dao: BookDao) {
                                 SeriesSection(
                                     seriesName = seriesName,
                                     books = seriesBooks,
+                                    refreshingIsbn = refreshingIsbn,
                                     onDeleteBook = { book -> scope.launch { dao.deleteBook(book) } },
                                     onRefreshBook = { book ->
                                         scope.launch {
-                                            val updated = fetchBookInfo(book.isbn)
-                                            dao.insertBook(updated)
-                                            Toast.makeText(context, "Mis à jour : ${updated.title}", Toast.LENGTH_SHORT).show()
+                                            refreshingIsbn = book.isbn
+                                            try {
+                                                val updated = fetchBookInfo(book.isbn)
+                                                dao.insertBook(updated)
+                                                Toast.makeText(context, "Mis à jour : ${updated.title}", Toast.LENGTH_SHORT).show()
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "Erreur de mise à jour", Toast.LENGTH_SHORT).show()
+                                            } finally {
+                                                refreshingIsbn = null
+                                            }
                                         }
                                     }
                                 )
@@ -273,9 +283,13 @@ fun MainScreen(dao: BookDao) {
                     val clean = isbn.filter { it.isDigit() || it == 'X' || it == 'x' }
                     if (clean.length >= 10) {
                         scope.launch {
-                            val book = fetchBookInfo(clean)
-                            dao.insertBook(book)
-                            Toast.makeText(context, "Ajouté : ${book.title}", Toast.LENGTH_SHORT).show()
+                            try {
+                                val book = fetchBookInfo(clean)
+                                dao.insertBook(book)
+                                Toast.makeText(context, "Ajouté : ${book.title}", Toast.LENGTH_SHORT).show()
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Erreur de numérisation", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     }
                 },
@@ -286,13 +300,14 @@ fun MainScreen(dao: BookDao) {
 }
 
 // ==========================================
-// 4. COMPOSANTS D'AFFICHAGE (CARTE & SÉRIE)
+// 4. COMPOSANTS D'AFFICHAGE
 // ==========================================
 
 @Composable
 fun SeriesSection(
     seriesName: String, 
     books: List<Book>, 
+    refreshingIsbn: String?,
     onDeleteBook: (Book) -> Unit,
     onRefreshBook: (Book) -> Unit
 ) {
@@ -329,6 +344,7 @@ fun SeriesSection(
                 books.forEach { book ->
                     BookItemCard(
                         book = book, 
+                        isRefreshing = refreshingIsbn == book.isbn,
                         onDelete = { onDeleteBook(book) },
                         onRefresh = { onRefreshBook(book) }
                     )
@@ -341,11 +357,11 @@ fun SeriesSection(
 @Composable
 fun BookItemCard(
     book: Book, 
+    isRefreshing: Boolean,
     onDelete: () -> Unit,
     onRefresh: () -> Unit
 ) {
     var isImageError by remember { mutableStateOf(false) }
-    var isRefreshing by remember { mutableStateOf(false) }
     val isFallbackCover = book.coverUrl.isBlank() || isImageError || book.coverUrl.contains("blank")
 
     Card(
@@ -440,10 +456,7 @@ fun BookItemCard(
                         color = MaterialTheme.colorScheme.primary
                     )
                 } else {
-                    IconButton(onClick = {
-                        isRefreshing = true
-                        onRefresh()
-                    }) {
+                    IconButton(onClick = onRefresh) {
                         Icon(
                             imageVector = Icons.Filled.Refresh,
                             contentDescription = "Actualiser",
@@ -581,7 +594,7 @@ suspend fun exportBooksToCsv(context: Context, uri: Uri, books: List<Book>): Boo
 }
 
 // ==========================================
-// 6. MOTEUR MULTI-SOURCES METADATAS LIVRES
+// 6. MOTEUR SECURISE MULTI-SOURCES METADATAS
 // ==========================================
 
 suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
@@ -697,7 +710,7 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
         }
     }
 
-    // 4. SCRAPING SÉCURITÉ WEB (LesLibraires)
+    // 4. SCRAPING SÉCURITÉ WEB
     if (title.isBlank() || cover.isBlank()) {
         try {
             val url = URL("https://www.leslibraires.fr/livre/$isbn")
@@ -729,7 +742,7 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
         }
     }
 
-    // Nettoyage final des valeurs
+    // Nettoyage final
     if (title.isBlank()) title = "Livre $isbn"
     if (authors.isBlank()) authors = "Auteur non renseigné"
 
