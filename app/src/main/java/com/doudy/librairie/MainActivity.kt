@@ -1,4 +1,4 @@
-package com.example.booklibrary
+package com.doudy.librairie
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -7,7 +7,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,7 +23,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -35,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,18 +50,18 @@ import java.net.URLEncoder
 // 1. PALETTE DE COULEURS & DESIGN SYSTEM
 // ==========================================
 object AppTheme {
-    val BackgroundDark = Color(0xFF0F172A)      // Deep Slate Night
-    val SurfaceDark = Color(0xFF1E293B)         // Elevated Slate
-    val CardBackground = Color(0xFF334155)      // Glass Slate
-    val CardBorder = Color(0xFF475569)          // Subtle Edge
+    val BackgroundDark = Color(0xFF0F172A)
+    val SurfaceDark = Color(0xFF1E293B)
+    val CardBackground = Color(0xFF334155)
+    val CardBorder = Color(0xFF475569)
     
-    val PrimaryEmerald = Color(0xFF10B981)      // Emerald Bright Accent
-    val AccentTeal = Color(0xFF14B8A6)          // Soft Teal
-    val AccentRose = Color(0xFFF43F5E)          // Badge Rose
+    val PrimaryEmerald = Color(0xFF10B981)
+    val AccentTeal = Color(0xFF14B8A6)
+    val AccentRose = Color(0xFFF43F5E)
     
-    val TextPrimary = Color(0xFFF8FAFC)         // Crisp High Contrast White
-    val TextSecondary = Color(0xFF94A3B8)       // Muted Soft Slate
-    val TextTertiary = Color(0xFF64748B)        // Deep Subdued Slate
+    val TextPrimary = Color(0xFFF8FAFC)
+    val TextSecondary = Color(0xFF94A3B8)
+    val TextTertiary = Color(0xFF64748B)
 }
 
 // ==========================================
@@ -311,7 +310,6 @@ class BookViewModel : ViewModel() {
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     init {
-        // Exemples initiaux pour valider le tri numérique immédiat (Tome 1, Tome 2, Tome 10)
         _books.value = listOf(
             Book(isbn = "9782253003854", title = "L'Attaque des Titans - Tome 1", authors = "Hajime Isayama", series = "L'Attaque des Titans", coverUrl = "https://covers.openlibrary.org/b/id/10523456-M.jpg"),
             Book(isbn = "9782253003861", title = "L'Attaque des Titans - Tome 10", authors = "Hajime Isayama", series = "L'Attaque des Titans", coverUrl = "https://covers.openlibrary.org/b/id/10523457-M.jpg"),
@@ -370,7 +368,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(viewModel: BookViewModel = androidx.lifecycle.viewmodel.compose.viewModel()) {
+fun MainScreen(viewModel: BookViewModel = viewModel()) {
     val books by viewModel.books.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
     
@@ -378,7 +376,6 @@ fun MainScreen(viewModel: BookViewModel = androidx.lifecycle.viewmodel.compose.v
     var inputQuery by remember { mutableStateOf("") }
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    // Traitement dynamique & tri absolu des séries
     val groupedBooks = remember(books, searchQuery) {
         val filtered = if (searchQuery.isBlank()) books
         else books.filter {
@@ -396,7 +393,6 @@ fun MainScreen(viewModel: BookViewModel = androidx.lifecycle.viewmodel.compose.v
             }
             if (s.isBlank()) "Hors série" else s
         }.mapValues { (_, seriesList) ->
-            // Tri par numéro de tome exact (numérique), puis titre en égalité
             seriesList.sortedWith(
                 compareBy<Book> { extractVolumeNumber(it.title) }
                     .thenBy { it.title }
@@ -449,7 +445,6 @@ fun MainScreen(viewModel: BookViewModel = androidx.lifecycle.viewmodel.compose.v
                 .padding(paddingValues)
                 .padding(horizontal = 16.dp)
         ) {
-            // Zone d'ajout de livre
             Card(
                 colors = CardDefaults.cardColors(containerColor = AppTheme.SurfaceDark),
                 shape = RoundedCornerShape(16.dp),
@@ -498,7 +493,6 @@ fun MainScreen(viewModel: BookViewModel = androidx.lifecycle.viewmodel.compose.v
                 }
             }
 
-            // Statut dynamique (Chargement / Erreur / Succès)
             AnimatedVisibility(visible = uiState !is UiState.Idle) {
                 when (uiState) {
                     is UiState.Loading -> {
@@ -536,7 +530,6 @@ fun MainScreen(viewModel: BookViewModel = androidx.lifecycle.viewmodel.compose.v
                 }
             }
 
-            // Filtre de recherche instantané
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
@@ -553,7 +546,6 @@ fun MainScreen(viewModel: BookViewModel = androidx.lifecycle.viewmodel.compose.v
                 )
             )
 
-            // Contenu principal de la liste
             if (groupedBooks.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
