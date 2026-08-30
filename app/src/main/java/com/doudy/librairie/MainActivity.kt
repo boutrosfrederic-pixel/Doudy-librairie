@@ -1,11 +1,23 @@
 package com.doudy.librairie
 
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.animation.*
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -25,26 +37,36 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.concurrent.Executors
 
 // ==========================================
 // 1. PALETTE DE COULEURS & DESIGN SYSTEM
@@ -65,7 +87,7 @@ object AppTheme {
 }
 
 // ==========================================
-// 2. MODÈLE DE DONNÉES (BOOK)
+// 2. MODÈLE DE DONNÉES
 // ==========================================
 data class Book(
     val id: String = java.util.UUID.randomUUID().toString(),
@@ -81,7 +103,7 @@ data class Book(
 )
 
 // ==========================================
-// 3. EXTRACTION INTELLIGENTE DE SÉRIES & TOMES
+// 3. FONCTIONS UTILITAIRES DE SÉRIES & STRIP
 // ==========================================
 fun extractSeriesFromTitle(title: String): String {
     if (title.isBlank()) return "Hors série"
@@ -108,13 +130,11 @@ fun extractSeriesFromTitle(title: String): String {
 
 fun extractVolumeNumber(title: String): Int {
     if (title.isBlank()) return 999
-
     val patterns = listOf(
         Regex("""(?i)(?:Tome|T\.|T|Volume|Vol\.|Vol|Book|Saison|#)\s*(\d+)"""),
         Regex("""(?i)T(\d+)\b"""),
         Regex("""\b(\d+)\b""")
     )
-
     for (pattern in patterns) {
         val match = pattern.find(title)
         if (match != null) {
@@ -126,10 +146,9 @@ fun extractVolumeNumber(title: String): Int {
 }
 
 // ==========================================
-// 4. SERVICE API DE RECHERCHE DÉCOUPLÉ
+// 4. API DE RECHERCHE DÉCOUPLÉE
 // ==========================================
 object BookApiService {
-
     suspend fun searchBook(isbnOrTitle: String): Book? = withContext(Dispatchers.IO) {
         val cleanQuery = isbnOrTitle.trim()
         val isIsbn = cleanQuery.replace("-", "").all { it.isDigit() } && cleanQuery.length >= 9
@@ -167,21 +186,17 @@ object BookApiService {
             val publisher = if (publishers != null && publishers.length() > 0) publishers.getJSONObject(0).optString("name") else ""
             val publishDate = bookObj.optString("publish_date", "")
 
-            val series = extractSeriesFromTitle(title)
-
             Book(
                 isbn = isbn,
                 title = title,
                 authors = authors,
-                series = series,
+                series = extractSeriesFromTitle(title),
                 coverUrl = coverUrl,
                 publisher = publisher,
                 publishedDate = publishDate,
                 source = "Open Library"
             )
-        } catch (e: Exception) {
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
     private fun fetchFromGoogleBooks(query: String): Book? {
@@ -225,22 +240,18 @@ object BookApiService {
                 }
             }
 
-            val series = extractSeriesFromTitle(title)
-
             Book(
                 isbn = isbn,
                 title = title,
                 authors = authors,
-                series = series,
+                series = extractSeriesFromTitle(title),
                 coverUrl = coverUrl,
                 publisher = publisher,
                 publishedDate = publishedDate,
                 description = description,
                 source = "Google Books"
             )
-        } catch (e: Exception) {
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
     private fun fetchFromBnf(isbn: String): Book? {
@@ -255,18 +266,14 @@ object BookApiService {
             val authorsList = creatorMatches.map { it.groupValues[1].trim() }.toList()
             val authors = if (authorsList.isNotEmpty()) authorsList.joinToString(", ") else "Auteur inconnu"
 
-            val series = extractSeriesFromTitle(title)
-
             Book(
                 isbn = isbn,
                 title = title,
                 authors = authors,
-                series = series,
+                series = extractSeriesFromTitle(title),
                 source = "BnF (France)"
             )
-        } catch (e: Exception) {
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
     private fun makeHttpRequest(urlString: String): String? {
@@ -278,15 +285,10 @@ object BookApiService {
             conn.readTimeout = 8000
             conn.requestMethod = "GET"
             conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android BookManager/2.0)")
-
             if (conn.responseCode == 200) {
                 conn.inputStream.bufferedReader().use { it.readText() }
-            } else {
-                null
-            }
-        } catch (e: Exception) {
-            null
-        } finally {
+            } else null
+        } catch (e: Exception) { null } finally {
             conn?.disconnect()
         }
     }
@@ -320,7 +322,6 @@ class BookViewModel : ViewModel() {
 
     fun searchAndAddBook(isbnOrQuery: String) {
         if (isbnOrQuery.isBlank()) return
-        
         viewModelScope.launch {
             _uiState.value = UiState.Loading
             val foundBook = BookApiService.searchBook(isbnOrQuery)
@@ -339,6 +340,30 @@ class BookViewModel : ViewModel() {
 
     fun resetState() {
         _uiState.value = UiState.Idle
+    }
+
+    fun exportToJson(context: Context) {
+        try {
+            val jsonArray = JSONArray()
+            _books.value.forEach { book ->
+                val obj = JSONObject().apply {
+                    put("isbn", book.isbn)
+                    put("title", book.title)
+                    put("authors", book.authors)
+                    put("series", book.series)
+                    put("coverUrl", book.coverUrl)
+                    put("publisher", book.publisher)
+                }
+                jsonArray.put(obj)
+            }
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, jsonArray.toString(2))
+            }
+            context.startActivity(Intent.createChooser(intent, "Exporter la bibliothèque"))
+        } catch (e: Exception) {
+            Toast.makeText(context, "Erreur d'exportation", Toast.LENGTH_SHORT).show()
+        }
     }
 }
 
@@ -369,12 +394,22 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: BookViewModel = viewModel()) {
+    val context = LocalContext.current
     val books by viewModel.books.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
-    
+
     var searchQuery by remember { mutableStateOf("") }
     var inputQuery by remember { mutableStateOf("") }
+    var showScanner by remember { mutableStateOf(false) }
+    
     val keyboardController = LocalSoftwareKeyboardController.current
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) showScanner = true
+        else Toast.makeText(context, "Permission caméra requise pour scanner", Toast.LENGTH_SHORT).show()
+    }
 
     val groupedBooks = remember(books, searchQuery) {
         val filtered = if (searchQuery.isBlank()) books
@@ -406,9 +441,6 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
         }
     }
 
-    val totalBooks = books.size
-    val totalSeries = groupedBooks.keys.count { it != "Hors série" }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -421,17 +453,15 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                             color = AppTheme.TextPrimary
                         )
                         Text(
-                            text = "$totalBooks livre(s) • $totalSeries série(s)",
+                            text = "${books.size} livre(s) • ${groupedBooks.keys.count { it != "Hors série" }} série(s)",
                             fontSize = 12.sp,
                             color = AppTheme.TextSecondary
                         )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = AppTheme.BackgroundDark
-                ),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = AppTheme.BackgroundDark),
                 actions = {
-                    IconButton(onClick = { /* Export / Sync */ }) {
+                    IconButton(onClick = { viewModel.exportToJson(context) }) {
                         Icon(Icons.Outlined.FileDownload, contentDescription = "Exporter", tint = AppTheme.PrimaryEmerald)
                     }
                 }
@@ -459,12 +489,21 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                         .padding(horizontal = 12.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.Book, contentDescription = null, tint = AppTheme.PrimaryEmerald)
-                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(onClick = {
+                        val permissionCheck = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                        if (permissionCheck == PackageManager.PERMISSION_GRANTED) {
+                            showScanner = true
+                        } else {
+                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        }
+                    }) {
+                        Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan", tint = AppTheme.PrimaryEmerald)
+                    }
+
                     OutlinedTextField(
                         value = inputQuery,
                         onValueChange = { inputQuery = it },
-                        placeholder = { Text("ISBN ou Titre du livre...", color = AppTheme.TextTertiary) },
+                        placeholder = { Text("ISBN ou Titre...", color = AppTheme.TextTertiary) },
                         modifier = Modifier.weight(1f),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = Color.Transparent,
@@ -479,6 +518,7 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                             keyboardController?.hide()
                         })
                     )
+                    
                     Button(
                         onClick = {
                             viewModel.searchAndAddBook(inputQuery)
@@ -524,7 +564,7 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                             kotlinx.coroutines.delay(2500)
                             viewModel.resetState()
                         }
-                        Text("✔ Livre ajouté à la bibliothèque !", color = AppTheme.PrimaryEmerald, modifier = Modifier.padding(4.dp), fontSize = 13.sp)
+                        Text("✔ Livre ajouté avec succès !", color = AppTheme.PrimaryEmerald, modifier = Modifier.padding(4.dp), fontSize = 13.sp)
                     }
                     else -> {}
                 }
@@ -535,9 +575,7 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                 onValueChange = { searchQuery = it },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AppTheme.TextSecondary) },
                 placeholder = { Text("Filtrer par titre, auteur ou série...", color = AppTheme.TextTertiary) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = AppTheme.PrimaryEmerald,
@@ -551,7 +589,7 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(Icons.Outlined.AutoStories, contentDescription = null, modifier = Modifier.size(64.dp), tint = AppTheme.TextTertiary)
                         Spacer(modifier = Modifier.height(12.dp))
-                        Text("Votre bibliothèque est vide", color = AppTheme.TextSecondary, fontSize = 16.sp)
+                        Text("Aucun livre dans la liste", color = AppTheme.TextSecondary, fontSize = 16.sp)
                     }
                 }
             } else {
@@ -571,10 +609,114 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
             }
         }
     }
+
+    if (showScanner) {
+        Dialog(onDismissRequest = { showScanner = false }) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(400.dp),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    CameraBarcodeScanner(
+                        onBarcodeScanned = { barcode ->
+                            showScanner = false
+                            viewModel.searchAndAddBook(barcode)
+                        }
+                    )
+                    IconButton(
+                        onClick = { showScanner = false },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = "Fermer", tint = Color.White)
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ==========================================
-// 7. EN-TÊTES ET COMPOSANTS INDIVIDUELS
+// 7. MODULE DE SCANNER CAMERA ML KIT
+// ==========================================
+@Composable
+fun CameraBarcodeScanner(onBarcodeScanned: (String) -> Unit) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var isScanned by remember { mutableStateOf(false) }
+
+    AndroidView(
+        factory = { ctx ->
+            val previewView = PreviewView(ctx)
+            val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+
+            cameraProviderFuture.addListener({
+                val cameraProvider = cameraProviderFuture.get()
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
+
+                val barcodeScanner = BarcodeScanning.getClient()
+                val imageAnalysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+
+                imageAnalysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
+                    processImageProxy(barcodeScanner, imageProxy) { barcode ->
+                        if (!isScanned) {
+                            isScanned = true
+                            onBarcodeScanned(barcode)
+                        }
+                    }
+                }
+
+                val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                try {
+                    cameraProvider.unbindAll()
+                    cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, imageAnalysis)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }, ContextCompat.getMainExecutor(ctx))
+
+            previewView
+        },
+        modifier = Modifier.fillMaxSize()
+    )
+}
+
+@androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
+private fun processImageProxy(
+    scanner: com.google.mlkit.vision.barcode.BarcodeScanner,
+    imageProxy: ImageProxy,
+    onSuccess: (String) -> Unit
+) {
+    val mediaImage = imageProxy.image
+    if (mediaImage != null) {
+        val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+        scanner.process(image)
+            .addOnSuccessListener { barcodes ->
+                for (barcode in barcodes) {
+                    val rawValue = barcode.rawValue
+                    if (rawValue != null && (barcode.format == Barcode.FORMAT_EAN_13 || barcode.format == Barcode.FORMAT_EAN_8)) {
+                        onSuccess(rawValue)
+                        break
+                    }
+                }
+            }
+            .addOnCompleteListener {
+                imageProxy.close()
+            }
+    } else {
+        imageProxy.close()
+    }
+}
+
+// ==========================================
+// 8. EN-TÊTES ET COMPOSANTS INDIVIDUELS
 // ==========================================
 @Composable
 fun SeriesHeader(seriesName: String, count: Int) {
