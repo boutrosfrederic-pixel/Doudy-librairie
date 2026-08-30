@@ -60,7 +60,7 @@ import java.net.URL
 import java.util.regex.Pattern
 
 // 🔑 Clés d'API facultatives
-private const val GOOGLE_BOOKS_API_KEY = "" 
+private const val GOOGLE_BOOKS_API_KEY = ""
 
 // ==========================================
 // 1. ROOM DATABASE (MODÈLE ET DAO)
@@ -139,7 +139,6 @@ fun MainScreen(dao: BookDao) {
     var showScan by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
 
-    // Enregistre quel livre est en cours de rafraîchissement
     var refreshingIsbn by remember { mutableStateOf<String?>(null) }
 
     val groupedBooks = remember(books, searchQuery) {
@@ -254,19 +253,26 @@ fun MainScreen(dao: BookDao) {
                                     seriesName = seriesName,
                                     books = seriesBooks,
                                     refreshingIsbn = refreshingIsbn,
-                                    onDeleteBook = { book -> scope.launch { dao.deleteBook(book) } },
+                                    onDeleteBook = { book -> 
+                                        scope.launch(Dispatchers.IO) { 
+                                            dao.deleteBook(book) 
+                                        } 
+                                    },
                                     onRefreshBook = { book ->
                                         scope.launch {
                                             refreshingIsbn = book.isbn
-                                            try {
-                                                val updated = fetchBookInfo(book.isbn)
-                                                dao.insertBook(updated)
-                                                Toast.makeText(context, "Mis à jour : ${updated.title}", Toast.LENGTH_SHORT).show()
-                                            } catch (e: Exception) {
-                                                Toast.makeText(context, "Erreur de mise à jour", Toast.LENGTH_SHORT).show()
-                                            } finally {
-                                                refreshingIsbn = null
+                                            runCatching {
+                                                withContext(Dispatchers.IO) {
+                                                    val updated = fetchBookInfo(book.isbn)
+                                                    dao.insertBook(updated)
+                                                    updated
+                                                }
+                                            }.onSuccess { updatedBook ->
+                                                Toast.makeText(context, "Mis à jour : ${updatedBook.title}", Toast.LENGTH_SHORT).show()
+                                            }.onFailure { err ->
+                                                Toast.makeText(context, "Erreur : ${err.localizedMessage ?: "Impossible de contacter l'API"}", Toast.LENGTH_LONG).show()
                                             }
+                                            refreshingIsbn = null
                                         }
                                     }
                                 )
@@ -283,12 +289,16 @@ fun MainScreen(dao: BookDao) {
                     val clean = isbn.filter { it.isDigit() || it == 'X' || it == 'x' }
                     if (clean.length >= 10) {
                         scope.launch {
-                            try {
-                                val book = fetchBookInfo(clean)
-                                dao.insertBook(book)
+                            runCatching {
+                                withContext(Dispatchers.IO) {
+                                    val book = fetchBookInfo(clean)
+                                    dao.insertBook(book)
+                                    book
+                                }
+                            }.onSuccess { book ->
                                 Toast.makeText(context, "Ajouté : ${book.title}", Toast.LENGTH_SHORT).show()
-                            } catch (e: Exception) {
-                                Toast.makeText(context, "Erreur de numérisation", Toast.LENGTH_SHORT).show()
+                            }.onFailure {
+                                Toast.makeText(context, "Erreur lors de l'ajout", Toast.LENGTH_SHORT).show()
                             }
                         }
                     }
@@ -616,21 +626,28 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
             val json = JSONObject(jsonStr)
 
             if (json.optInt("totalItems", 0) > 0) {
-                val info = json.getJSONArray("items").getJSONObject(0).getJSONObject("volumeInfo")
-                title = info.optString("title", "")
+                val items = json.optJSONArray("items")
+                if (items != null && items.length() > 0) {
+                    val info = items.getJSONObject(0).optJSONObject("volumeInfo")
+                    if (info != null) {
+                        title = info.optString("title", "")
 
-                if (info.has("authors")) {
-                    val arr = info.getJSONArray("authors")
-                    val list = mutableListOf<String>()
-                    for (i in 0 until arr.length()) list.add(arr.getString(i))
-                    authors = list.joinToString(", ")
-                }
+                        if (info.has("authors")) {
+                            val arr = info.optJSONArray("authors")
+                            if (arr != null) {
+                                val list = mutableListOf<String>()
+                                for (i in 0 until arr.length()) list.add(arr.getString(i))
+                                authors = list.joinToString(", ")
+                            }
+                        }
 
-                if (info.has("imageLinks")) {
-                    val images = info.getJSONObject("imageLinks")
-                    cover = images.optString("thumbnail", "")
-                        .ifEmpty { images.optString("smallThumbnail", "") }
-                        .replace("http:", "https:")
+                        val images = info.optJSONObject("imageLinks")
+                        if (images != null) {
+                            cover = images.optString("thumbnail", "")
+                                .ifEmpty { images.optString("smallThumbnail", "") }
+                                .replace("http:", "https:")
+                        }
+                    }
                 }
             }
         }
@@ -683,25 +700,29 @@ suspend fun fetchBookInfo(isbn: String): Book = withContext(Dispatchers.IO) {
                 val json = JSONObject(jsonStr)
 
                 if (json.has("ISBN:$isbn")) {
-                    val bookObj = json.getJSONObject("ISBN:$isbn")
+                    val bookObj = json.optJSONObject("ISBN:$isbn")
+                    if (bookObj != null) {
+                        if (title.isBlank()) title = bookObj.optString("title", "")
 
-                    if (title.isBlank()) title = bookObj.optString("title", "")
-
-                    if (authors.isBlank() && bookObj.has("authors")) {
-                        val authorsArr = bookObj.getJSONArray("authors")
-                        val list = mutableListOf<String>()
-                        for (i in 0 until authorsArr.length()) {
-                            list.add(authorsArr.getJSONObject(i).optString("name"))
+                        if (authors.isBlank() && bookObj.has("authors")) {
+                            val authorsArr = bookObj.optJSONArray("authors")
+                            if (authorsArr != null) {
+                                val list = mutableListOf<String>()
+                                for (i in 0 until authorsArr.length()) {
+                                    val a = authorsArr.optJSONObject(i)
+                                    if (a != null) list.add(a.optString("name"))
+                                }
+                                authors = list.joinToString(", ")
+                            }
                         }
-                        authors = list.joinToString(", ")
-                    }
 
-                    if (cover.isBlank() && bookObj.has("cover")) {
-                        val coverObj = bookObj.getJSONObject("cover")
-                        cover = coverObj.optString("large", "")
-                            .ifEmpty { coverObj.optString("medium", "") }
-                            .ifEmpty { coverObj.optString("small", "") }
-                            .replace("http:", "https:")
+                        val coverObj = bookObj.optJSONObject("cover")
+                        if (cover.isBlank() && coverObj != null) {
+                            cover = coverObj.optString("large", "")
+                                .ifEmpty { coverObj.optString("medium", "") }
+                                .ifEmpty { coverObj.optString("small", "") }
+                                .replace("http:", "https:")
+                        }
                     }
                 }
             }
