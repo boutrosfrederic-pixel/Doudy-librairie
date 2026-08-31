@@ -92,7 +92,7 @@ object AppTheme {
 }
 
 // ==========================================
-// 2. MODÈLE DE DONNÉES ENRICHI
+// 2. ENUMS DE FILTRES ET TRIS
 // ==========================================
 enum class ReadStatus(val label: String) {
     UNREAD("Non lu"),
@@ -101,6 +101,17 @@ enum class ReadStatus(val label: String) {
     ABANDONED("Abandonné")
 }
 
+enum class SortOption(val label: String) {
+    TITLE("Titre"),
+    AUTHOR("Auteur"),
+    RATING("Note"),
+    PROGRESS("Progression"),
+    DATE_ADDED("Date d'ajout")
+}
+
+// ==========================================
+// 3. MODÈLE DE DONNÉES ENRICHI
+// ==========================================
 data class Book(
     val id: String = java.util.UUID.randomUUID().toString(),
     val isbn: String,
@@ -118,11 +129,12 @@ data class Book(
     val status: ReadStatus = ReadStatus.UNREAD,
     val personalNotes: String = "",
     val isBorrowed: Boolean = false,
-    val borrowerName: String = ""
+    val borrowerName: String = "",
+    val addedTimestamp: Long = System.currentTimeMillis()
 )
 
 // ==========================================
-// 3. FONCTIONS UTILITAIRES DE SÉRIES
+// 4. FONCTIONS UTILITAIRES DE SÉRIES
 // ==========================================
 fun extractSeriesFromTitle(title: String): String {
     if (title.isBlank()) return "Hors série"
@@ -165,7 +177,7 @@ fun extractVolumeNumber(title: String): Int {
 }
 
 // ==========================================
-// 4. API DE RECHERCHE
+// 5. API DE RECHERCHE
 // ==========================================
 object BookApiService {
     suspend fun searchBook(isbnOrTitle: String): Book? = withContext(Dispatchers.IO) {
@@ -318,7 +330,7 @@ object BookApiService {
 }
 
 // ==========================================
-// 5. VIEWMODEL & ÉTATS DE L'APPLICATION
+// 6. VIEWMODEL & ÉTATS DE L'APPLICATION
 // ==========================================
 sealed class UiState {
     object Idle : UiState()
@@ -395,7 +407,7 @@ class BookViewModel : ViewModel() {
 }
 
 // ==========================================
-// 6. ACTIVITÉ PRINCIPALE
+// 7. ACTIVITÉ PRINCIPALE
 // ==========================================
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -426,9 +438,14 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
     val uiState by viewModel.uiState.collectAsState()
 
     var searchQuery by remember { mutableStateOf("") }
+    var selectedStatusFilter by remember { mutableStateOf<ReadStatus?>(null) }
+    var activeSortOption by remember { mutableStateOf(SortOption.TITLE) }
+    var isAscending by remember { mutableStateOf(true) }
+
     var showScanner by remember { mutableStateOf(false) }
     var isBatchMode by remember { mutableStateOf(false) }
     var showAddBottomSheet by remember { mutableStateOf(false) }
+    var showFilterSheet by remember { mutableStateOf(false) }
     var selectedBookForDetail by remember { mutableStateOf<Book?>(null) }
     var selectedTab by remember { mutableIntStateOf(0) }
     var selectedNavIndex by remember { mutableIntStateOf(0) }
@@ -442,16 +459,28 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
         else Toast.makeText(context, "Permission caméra requise", Toast.LENGTH_SHORT).show()
     }
 
-    val groupedBooks = remember(books, searchQuery) {
-        val filtered = if (searchQuery.isBlank()) books
-        else books.filter {
-            it.title.contains(searchQuery, ignoreCase = true) ||
-            it.authors.contains(searchQuery, ignoreCase = true) ||
-            it.series.contains(searchQuery, ignoreCase = true) ||
-            it.isbn.contains(searchQuery)
+    // Filtrage et Tri dynamiques
+    val groupedBooks = remember(books, searchQuery, selectedStatusFilter, activeSortOption, isAscending) {
+        val filtered = books.filter { book ->
+            val matchesQuery = searchQuery.isBlank() ||
+                book.title.contains(searchQuery, ignoreCase = true) ||
+                book.authors.contains(searchQuery, ignoreCase = true) ||
+                book.series.contains(searchQuery, ignoreCase = true) ||
+                book.isbn.contains(searchQuery)
+
+            val matchesStatus = selectedStatusFilter == null || book.status == selectedStatusFilter
+            matchesQuery && matchesStatus
         }
 
-        filtered.groupBy { book ->
+        val sorted = when (activeSortOption) {
+            SortOption.TITLE -> if (isAscending) filtered.sortedBy { it.title } else filtered.sortedByDescending { it.title }
+            SortOption.AUTHOR -> if (isAscending) filtered.sortedBy { it.authors } else filtered.sortedByDescending { it.authors }
+            SortOption.RATING -> if (isAscending) filtered.sortedBy { it.rating } else filtered.sortedByDescending { it.rating }
+            SortOption.PROGRESS -> if (isAscending) filtered.sortedBy { it.currentPage } else filtered.sortedByDescending { it.currentPage }
+            SortOption.DATE_ADDED -> if (isAscending) filtered.sortedBy { it.addedTimestamp } else filtered.sortedByDescending { it.addedTimestamp }
+        }
+
+        sorted.groupBy { book ->
             val s = if (book.series.isNotBlank() && book.series != "Hors série") {
                 book.series
             } else {
@@ -622,7 +651,7 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                 }
             }
 
-            // Barre de Filtre & Recherche
+            // Barre de Recherche & Filtres Activés
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -645,20 +674,32 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                 )
 
                 Surface(
-                    color = AppTheme.SurfaceDark,
+                    color = if (selectedStatusFilter != null) AppTheme.PrimaryEmerald.copy(alpha = 0.15f) else AppTheme.SurfaceDark,
                     shape = RoundedCornerShape(8.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, AppTheme.CardBorder),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (selectedStatusFilter != null) AppTheme.PrimaryEmerald else AppTheme.CardBorder
+                    ),
                     modifier = Modifier
                         .height(46.dp)
-                        .clickable { }
+                        .clickable { showFilterSheet = true }
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.FilterList, contentDescription = null, tint = AppTheme.TextSecondary, modifier = Modifier.size(18.dp))
+                        Icon(
+                            Icons.Default.FilterList,
+                            contentDescription = null,
+                            tint = if (selectedStatusFilter != null) AppTheme.PrimaryEmerald else AppTheme.TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Filtre", color = AppTheme.TextSecondary, fontSize = 13.sp)
+                        Text(
+                            text = "Filtre",
+                            color = if (selectedStatusFilter != null) AppTheme.PrimaryEmerald else AppTheme.TextSecondary,
+                            fontSize = 13.sp
+                        )
                     }
                 }
             }
@@ -669,7 +710,7 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(Icons.Outlined.AutoStories, contentDescription = null, modifier = Modifier.size(56.dp), tint = AppTheme.TextTertiary)
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text("Aucun livre dans la collection", color = AppTheme.TextSecondary, fontSize = 14.sp)
+                        Text("Aucun livre ne correspond aux critères", color = AppTheme.TextSecondary, fontSize = 14.sp)
                     }
                 }
             } else {
@@ -693,6 +734,84 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // Modal Bottom Sheet des Filtres & Tris
+    if (showFilterSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showFilterSheet = false },
+            containerColor = AppTheme.SurfaceDark
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Text("Filtrer par statut", fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary, fontSize = 16.sp)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = selectedStatusFilter == null,
+                        onClick = { selectedStatusFilter = null },
+                        label = { Text("Tous") }
+                    )
+                    ReadStatus.values().forEach { status ->
+                        FilterChip(
+                            selected = selectedStatusFilter == status,
+                            onClick = { selectedStatusFilter = status },
+                            label = { Text(status.label) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = AppTheme.PrimaryEmerald,
+                                selectedLabelColor = Color.Black
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Divider(color = AppTheme.CardBorder)
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Trier par", fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary, fontSize = 16.sp)
+                    IconButton(onClick = { isAscending = !isAscending }) {
+                        Icon(
+                            imageVector = if (isAscending) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
+                            contentDescription = "Ordre",
+                            tint = AppTheme.PrimaryEmerald
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                SortOption.values().forEach { option ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { activeSortOption = option }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(option.label, color = if (activeSortOption == option) AppTheme.PrimaryEmerald else AppTheme.TextPrimary)
+                        if (activeSortOption == option) {
+                            Icon(Icons.Default.Check, contentDescription = null, tint = AppTheme.PrimaryEmerald)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
             }
         }
     }
@@ -798,7 +917,7 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
 }
 
 // ==========================================
-// 7. COMPOSANT FICHE DÉTAILLÉE DU LIVRE
+// 8. COMPOSANTS DE FICHE & AUTRES
 // ==========================================
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -808,7 +927,7 @@ fun BookDetailSheet(
     onUpdate: (Book) -> Unit,
     onDelete: () -> Unit
 ) {
-    var detailTab by remember { mutableIntStateOf(0) } // 0: Notes, 1: Info
+    var detailTab by remember { mutableIntStateOf(0) }
     val volumeNum = remember(book.title) { extractVolumeNumber(book.title) }
 
     ModalBottomSheet(
@@ -823,7 +942,6 @@ fun BookDetailSheet(
                 .padding(horizontal = 16.dp)
                 .verticalScroll(rememberScrollState())
         ) {
-            // En-tête : Couverture et Infos Principales
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -880,7 +998,6 @@ fun BookDetailSheet(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Rating étoiles
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         repeat(5) { index ->
                             val isStarFilled = index < book.rating.toInt()
@@ -903,7 +1020,6 @@ fun BookDetailSheet(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Badge de Série
                     Surface(
                         color = AppTheme.SurfaceDark,
                         shape = RoundedCornerShape(6.dp),
@@ -921,7 +1037,6 @@ fun BookDetailSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Onglets de la Fiche Détaillée
             TabRow(
                 selectedTabIndex = detailTab,
                 containerColor = AppTheme.SurfaceDark,
@@ -943,7 +1058,6 @@ fun BookDetailSheet(
             Spacer(modifier = Modifier.height(16.dp))
 
             if (detailTab == 0) {
-                // CONTENU ONGLET 1 : SUIVI DE LECTURE & PROGRESSION
                 Card(
                     colors = CardDefaults.cardColors(containerColor = AppTheme.SurfaceDark),
                     shape = RoundedCornerShape(12.dp),
@@ -986,7 +1100,6 @@ fun BookDetailSheet(
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // Chips de Statut
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             ReadStatus.values().forEach { status ->
                                 FilterChip(
@@ -1008,7 +1121,6 @@ fun BookDetailSheet(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Zone de Notes personnelles
                 OutlinedTextField(
                     value = book.personalNotes,
                     onValueChange = { onUpdate(book.copy(personalNotes = it)) },
@@ -1024,7 +1136,6 @@ fun BookDetailSheet(
                     )
                 )
             } else {
-                // CONTENU ONGLET 2 : INFORMATIONS COMPLÈTES
                 Card(
                     colors = CardDefaults.cardColors(containerColor = AppTheme.SurfaceDark),
                     shape = RoundedCornerShape(12.dp),
@@ -1056,7 +1167,6 @@ fun BookDetailSheet(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Actions : Supprimer
             OutlinedButton(
                 onClick = onDelete,
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = AppTheme.AccentRose),
@@ -1084,9 +1194,6 @@ fun InfoRow(label: String, value: String) {
     }
 }
 
-// ==========================================
-// 8. AUTRES COMPOSANTS (OPTIONS & CAMERA)
-// ==========================================
 @Composable
 fun AddOptionItem(
     icon: ImageVector,
