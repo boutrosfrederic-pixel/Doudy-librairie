@@ -19,9 +19,13 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -42,6 +46,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -69,18 +74,19 @@ import java.net.URLEncoder
 import java.util.concurrent.Executors
 
 // ==========================================
-// 1. PALETTE DE COULEURS & DESIGN SYSTEM
+// 1. PALETTE DE COULEURS PERSONNALISÉE
 // ==========================================
 object AppTheme {
-    val BackgroundDark = Color(0xFF0F172A)
-    val SurfaceDark = Color(0xFF1E293B)
-    val CardBackground = Color(0xFF334155)
-    val CardBorder = Color(0xFF475569)
-    
+    val BackgroundDark = Color(0xFF12131C)
+    val SurfaceDark = Color(0xFF1E1F2C)
+    val CardBackground = Color(0xFF2A2C3E)
+    val CardBorder = Color(0xFF3A3D54)
+
     val PrimaryEmerald = Color(0xFF10B981)
-    val AccentTeal = Color(0xFF14B8A6)
+    val AccentTeal = Color(0xFF06B6D4)
+    val AccentPurple = Color(0xFF8B5CF6) // Couleur du badge de volume
     val AccentRose = Color(0xFFF43F5E)
-    
+
     val TextPrimary = Color(0xFFF8FAFC)
     val TextSecondary = Color(0xFF94A3B8)
     val TextTertiary = Color(0xFF64748B)
@@ -210,7 +216,7 @@ object BookApiService {
 
             val volumeInfo = items.getJSONObject(0).getJSONObject("volumeInfo")
             val title = volumeInfo.optString("title", "Titre inconnu")
-            
+
             val authorsArray = volumeInfo.optJSONArray("authors")
             val authorsList = mutableListOf<String>()
             if (authorsArray != null) {
@@ -219,7 +225,7 @@ object BookApiService {
                 }
             }
             val authors = if (authorsList.isNotEmpty()) authorsList.joinToString(", ") else "Auteur inconnu"
-            
+
             val imageLinks = volumeInfo.optJSONObject("imageLinks")
             val rawCover = imageLinks?.optString("thumbnail", "") ?: ""
             val coverUrl = rawCover.replace("http://", "https://")
@@ -368,7 +374,7 @@ class BookViewModel : ViewModel() {
 }
 
 // ==========================================
-// 6. ACTIVITÉ PRINCIPALE ET ÉCRAN DE L'APPLICATION
+// 6. ACTIVITÉ PRINCIPALE ET ÉCRAN
 // ==========================================
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -401,7 +407,10 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
     var searchQuery by remember { mutableStateOf("") }
     var inputQuery by remember { mutableStateOf("") }
     var showScanner by remember { mutableStateOf(false) }
-    
+    var selectedTab by remember { mutableIntStateOf(0) }
+    var selectedNavIndex by remember { mutableIntStateOf(0) }
+
+    val tabs = listOf("Livres", "Étagères", "Tags", "Souhaits")
     val keyboardController = LocalSoftwareKeyboardController.current
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
@@ -443,29 +452,120 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = "Ma Bibliothèque",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 22.sp,
-                            color = AppTheme.TextPrimary
-                        )
-                        Text(
-                            text = "${books.size} livre(s) • ${groupedBooks.keys.count { it != "Hors série" }} série(s)",
-                            fontSize = 12.sp,
-                            color = AppTheme.TextSecondary
-                        )
+            Column(modifier = Modifier.background(AppTheme.BackgroundDark)) {
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "Bibliothèque",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 24.sp,
+                                color = AppTheme.TextPrimary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "(${books.size} livres)",
+                                fontSize = 14.sp,
+                                color = AppTheme.TextSecondary
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = AppTheme.BackgroundDark),
+                    actions = {
+                        IconButton(onClick = { viewModel.exportToJson(context) }) {
+                            Icon(Icons.Outlined.FileDownload, contentDescription = "Exporter", tint = AppTheme.PrimaryEmerald)
+                        }
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = AppTheme.BackgroundDark),
-                actions = {
-                    IconButton(onClick = { viewModel.exportToJson(context) }) {
-                        Icon(Icons.Outlined.FileDownload, contentDescription = "Exporter", tint = AppTheme.PrimaryEmerald)
+                )
+
+                // Onglets Supérieurs (Livres, Étagères...)
+                TabRow(
+                    selectedTabIndex = selectedTab,
+                    containerColor = AppTheme.BackgroundDark,
+                    contentColor = AppTheme.PrimaryEmerald,
+                    divider = {}
+                ) {
+                    tabs.forEachIndexed { index, title ->
+                        Tab(
+                            selected = selectedTab == index,
+                            onClick = { selectedTab = index },
+                            text = {
+                                Text(
+                                    text = title,
+                                    fontSize = 14.sp,
+                                    fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (selectedTab == index) AppTheme.PrimaryEmerald else AppTheme.TextSecondary
+                                )
+                            }
+                        )
                     }
                 }
-            )
+            }
+        },
+        bottomBar = {
+            NavigationBar(
+                containerColor = AppTheme.SurfaceDark,
+                tonalElevation = 8.dp
+            ) {
+                NavigationBarItem(
+                    selected = selectedNavIndex == 0,
+                    onClick = { selectedNavIndex = 0 },
+                    icon = { Icon(Icons.Default.MenuBook, contentDescription = "Bibliothèque") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = AppTheme.PrimaryEmerald,
+                        indicatorColor = AppTheme.CardBackground
+                    )
+                )
+                NavigationBarItem(
+                    selected = selectedNavIndex == 1,
+                    onClick = { selectedNavIndex = 1 },
+                    icon = { Icon(Icons.Default.Explore, contentDescription = "Découvrir") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = AppTheme.PrimaryEmerald,
+                        indicatorColor = AppTheme.CardBackground
+                    )
+                )
+                NavigationBarItem(
+                    selected = false,
+                    onClick = {
+                        val permissionCheck = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                        if (permissionCheck == PackageManager.PERMISSION_GRANTED) {
+                            showScanner = true
+                        } else {
+                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        }
+                    },
+                    icon = {
+                        Box(
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .background(AppTheme.PrimaryEmerald),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = "Ajouter", tint = Color.Black)
+                        }
+                    }
+                )
+                NavigationBarItem(
+                    selected = selectedNavIndex == 2,
+                    onClick = { selectedNavIndex = 2 },
+                    icon = { Icon(Icons.Default.People, contentDescription = "Communauté") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = AppTheme.PrimaryEmerald,
+                        indicatorColor = AppTheme.CardBackground
+                    )
+                )
+                NavigationBarItem(
+                    selected = selectedNavIndex == 3,
+                    onClick = { selectedNavIndex = 3 },
+                    icon = { Icon(Icons.Default.MoreHoriz, contentDescription = "Menu") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = AppTheme.PrimaryEmerald,
+                        indicatorColor = AppTheme.CardBackground
+                    )
+                )
+            }
         },
         containerColor = AppTheme.BackgroundDark
     ) { paddingValues ->
@@ -473,20 +573,18 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(horizontal = 16.dp)
+                .padding(horizontal = 12.dp)
         ) {
+            // Barre d'Ajout Manuelle
             Card(
                 colors = CardDefaults.cardColors(containerColor = AppTheme.SurfaceDark),
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 8.dp)
-                    .shadow(4.dp, RoundedCornerShape(16.dp))
+                    .padding(vertical = 6.dp)
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = {
@@ -503,7 +601,7 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                     OutlinedTextField(
                         value = inputQuery,
                         onValueChange = { inputQuery = it },
-                        placeholder = { Text("ISBN ou Titre...", color = AppTheme.TextTertiary) },
+                        placeholder = { Text("ISBN ou Titre...", color = AppTheme.TextTertiary, fontSize = 14.sp) },
                         modifier = Modifier.weight(1f),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = Color.Transparent,
@@ -518,7 +616,7 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                             keyboardController?.hide()
                         })
                     )
-                    
+
                     Button(
                         onClick = {
                             viewModel.searchAndAddBook(inputQuery)
@@ -526,9 +624,10 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                             keyboardController?.hide()
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = AppTheme.PrimaryEmerald),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
-                        Text("Ajouter", color = Color.Black, fontWeight = FontWeight.Bold)
+                        Text("Ajouter", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
             }
@@ -537,13 +636,13 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                 when (uiState) {
                     is UiState.Loading -> {
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(8.dp),
+                            modifier = Modifier.fillMaxWidth().padding(6.dp),
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            CircularProgressIndicator(color = AppTheme.PrimaryEmerald, modifier = Modifier.size(22.dp))
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text("Recherche du livre...", color = AppTheme.TextSecondary, fontSize = 14.sp)
+                            CircularProgressIndicator(color = AppTheme.PrimaryEmerald, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Recherche en cours...", color = AppTheme.TextSecondary, fontSize = 13.sp)
                         }
                     }
                     is UiState.Error -> {
@@ -552,57 +651,87 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                             colors = CardDefaults.cardColors(containerColor = AppTheme.AccentRose.copy(alpha = 0.2f)),
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                         ) {
-                            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = AppTheme.AccentRose)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(msg, color = AppTheme.TextPrimary, fontSize = 13.sp)
-                            }
+                            Text(msg, color = AppTheme.TextPrimary, fontSize = 12.sp, modifier = Modifier.padding(8.dp))
                         }
                     }
                     is UiState.Success -> {
                         LaunchedEffect(Unit) {
-                            kotlinx.coroutines.delay(2500)
+                            kotlinx.coroutines.delay(2000)
                             viewModel.resetState()
                         }
-                        Text("✔ Livre ajouté avec succès !", color = AppTheme.PrimaryEmerald, modifier = Modifier.padding(4.dp), fontSize = 13.sp)
+                        Text("✔ Livre ajouté !", color = AppTheme.PrimaryEmerald, modifier = Modifier.padding(4.dp), fontSize = 12.sp)
                     }
                     else -> {}
                 }
             }
 
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AppTheme.TextSecondary) },
-                placeholder = { Text("Filtrer par titre, auteur ou série...", color = AppTheme.TextTertiary) },
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = AppTheme.PrimaryEmerald,
-                    unfocusedBorderColor = AppTheme.CardBorder,
-                    focusedTextColor = AppTheme.TextPrimary
+            // Boutons de Filtre et Recherche
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AppTheme.TextSecondary, modifier = Modifier.size(18.dp)) },
+                    placeholder = { Text("Recherche...", color = AppTheme.TextTertiary, fontSize = 13.sp) },
+                    modifier = Modifier.weight(1f).height(46.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AppTheme.PrimaryEmerald,
+                        unfocusedBorderColor = AppTheme.CardBorder,
+                        focusedTextColor = AppTheme.TextPrimary
+                    ),
+                    singleLine = true
                 )
-            )
 
+                Surface(
+                    color = AppTheme.SurfaceDark,
+                    shape = RoundedCornerShape(8.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, AppTheme.CardBorder),
+                    modifier = Modifier
+                        .height(46.dp)
+                        .clickable { }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.FilterList, contentDescription = null, tint = AppTheme.TextSecondary, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Filtre", color = AppTheme.TextSecondary, fontSize = 13.sp)
+                    }
+                }
+            }
+
+            // Grille de Livres (3 colonnes)
             if (groupedBooks.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Outlined.AutoStories, contentDescription = null, modifier = Modifier.size(64.dp), tint = AppTheme.TextTertiary)
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text("Aucun livre dans la liste", color = AppTheme.TextSecondary, fontSize = 16.sp)
+                        Icon(Icons.Outlined.AutoStories, contentDescription = null, modifier = Modifier.size(56.dp), tint = AppTheme.TextTertiary)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Aucun livre dans la collection", color = AppTheme.TextSecondary, fontSize = 14.sp)
                     }
                 }
             } else {
-                LazyColumn(
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = 24.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    contentPadding = PaddingValues(bottom = 16.dp, top = 8.dp)
                 ) {
                     groupedBooks.forEach { (seriesName, seriesBooks) ->
-                        item {
-                            SeriesHeader(seriesName = seriesName, count = seriesBooks.size)
+                        // En-tête de série occupant les 3 colonnes
+                        item(span = { GridItemSpan(3) }) {
+                            SeriesGridHeader(seriesName = seriesName, count = seriesBooks.size)
                         }
+
+                        // Éléments de la grille
                         items(seriesBooks, key = { it.id }) { book ->
-                            BookItemRow(book = book, onDelete = { viewModel.removeBook(book) })
+                            BookGridItem(book = book, onDelete = { viewModel.removeBook(book) })
                         }
                     }
                 }
@@ -615,7 +744,7 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(400.dp),
+                    .height(380.dp),
                 shape = RoundedCornerShape(16.dp)
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
@@ -640,7 +769,7 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
 }
 
 // ==========================================
-// 7. MODULE DE SCANNER CAMERA ML KIT
+// 7. MODULE SCANNER CAMERA ML KIT
 // ==========================================
 @Composable
 fun CameraBarcodeScanner(onBarcodeScanned: (String) -> Unit) {
@@ -716,127 +845,108 @@ private fun processImageProxy(
 }
 
 // ==========================================
-// 8. EN-TÊTES ET COMPOSANTS INDIVIDUELS
+// 8. COMPOSANTS DE LA GRILLE & VIGNETTES
 // ==========================================
 @Composable
-fun SeriesHeader(seriesName: String, count: Int) {
+fun SeriesGridHeader(seriesName: String, count: Int) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 16.dp, bottom = 8.dp),
+            .padding(top = 12.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
-                .size(10.dp)
+                .size(8.dp)
                 .clip(CircleShape)
                 .background(if (seriesName == "Hors série") AppTheme.TextTertiary else AppTheme.PrimaryEmerald)
         )
-        Spacer(modifier = Modifier.width(8.dp))
+        Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = seriesName,
             fontWeight = FontWeight.Bold,
-            fontSize = 18.sp,
+            fontSize = 16.sp,
             color = AppTheme.TextPrimary,
             modifier = Modifier.weight(1f)
         )
-        Surface(
-            color = AppTheme.SurfaceDark,
-            shape = RoundedCornerShape(12.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, AppTheme.CardBorder)
-        ) {
-            Text(
-                text = "$count vol.",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = AppTheme.AccentTeal,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-            )
-        }
+        Text(
+            text = "$count vol.",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = AppTheme.AccentTeal
+        )
     }
 }
 
 @Composable
-fun BookItemRow(book: Book, onDelete: () -> Unit) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = AppTheme.SurfaceDark),
-        shape = RoundedCornerShape(14.dp),
+fun BookGridItem(book: Book, onDelete: () -> Unit) {
+    val volumeNum = remember(book.title) { extractVolumeNumber(book.title) }
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 5.dp)
-            .shadow(2.dp, RoundedCornerShape(14.dp))
+            .clickable { /* Ouvre la fiche détail plus tard */ }
     ) {
-        Row(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .aspectRatio(0.68f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(AppTheme.CardBackground)
+                .border(1.dp, AppTheme.CardBorder, RoundedCornerShape(8.dp))
         ) {
             if (book.coverUrl.isNotBlank()) {
                 AsyncImage(
                     model = book.coverUrl,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(width = 50.dp, height = 75.dp)
-                        .clip(RoundedCornerShape(8.dp)),
+                    contentDescription = book.title,
+                    modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
                 )
             } else {
                 Box(
-                    modifier = Modifier
-                        .size(width = 50.dp, height = 75.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(AppTheme.CardBackground),
+                    modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.MenuBook, contentDescription = null, tint = AppTheme.TextTertiary)
-                }
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = book.title,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
-                    color = AppTheme.TextPrimary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = book.authors,
-                    fontSize = 13.sp,
-                    color = AppTheme.TextSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (book.isbn.isNotBlank()) {
-                        Text(
-                            text = "ISBN: ${book.isbn}",
-                            fontSize = 11.sp,
-                            color = AppTheme.TextTertiary
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    Text(
-                        text = "• ${book.source}",
-                        fontSize = 11.sp,
-                        color = AppTheme.PrimaryEmerald
+                    Icon(
+                        Icons.Default.MenuBook,
+                        contentDescription = null,
+                        tint = AppTheme.TextTertiary,
+                        modifier = Modifier.size(32.dp)
                     )
                 }
             }
 
-            IconButton(onClick = onDelete) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "Supprimer",
-                    tint = AppTheme.TextTertiary.copy(alpha = 0.7f)
-                )
+            // Badge du numéro de volume (Superposé en bas à gauche)
+            if (volumeNum != 999) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .background(
+                            color = AppTheme.AccentPurple,
+                            shape = RoundedCornerShape(topEnd = 6.dp, bottomStart = 8.dp)
+                        )
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "$volumeNum",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // Titre sous la couverture
+        Text(
+            text = book.title,
+            fontWeight = FontWeight.Medium,
+            fontSize = 12.sp,
+            color = AppTheme.TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
