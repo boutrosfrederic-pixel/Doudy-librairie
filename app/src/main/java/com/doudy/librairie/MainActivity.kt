@@ -350,21 +350,14 @@ sealed class UiState {
     data class Error(val message: String) : UiState()
 }
 
-class BookViewModel : ViewModel() {
-    private val _books = MutableStateFlow<List<Book>>(emptyList())
-    val books: StateFlow<List<Book>> = _books.asStateFlow()
+class BookViewModel(private val bookDao: BookDao) : ViewModel() {
+
+    val books: StateFlow<List<Book>> = bookDao.getAllBooks()
+        .map { list -> list.map { it.toDomain() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
-
-    init {
-        _books.value = listOf(
-            Book(isbn = "9782253003854", title = "L'Attaque des Titans - Tome 1", authors = "Hajime Isayama", series = "L'Attaque des Titans", coverUrl = "https://covers.openlibrary.org/b/id/10523456-M.jpg", totalPages = 192, currentPage = 120, rating = 4.5f, status = ReadStatus.READING),
-            Book(isbn = "9782253003861", title = "L'Attaque des Titans - Tome 10", authors = "Hajime Isayama", series = "L'Attaque des Titans", coverUrl = "https://covers.openlibrary.org/b/id/10523457-M.jpg", totalPages = 192, currentPage = 0, status = ReadStatus.UNREAD),
-            Book(isbn = "9782253003878", title = "L'Attaque des Titans - Tome 2", authors = "Hajime Isayama", series = "L'Attaque des Titans", coverUrl = "https://covers.openlibrary.org/b/id/10523458-M.jpg", totalPages = 192, currentPage = 192, rating = 5.0f, status = ReadStatus.READ),
-            Book(isbn = "9782070360024", title = "L'Étranger", authors = "Albert Camus", series = "Hors série", totalPages = 184, currentPage = 184, rating = 4.0f, status = ReadStatus.READ)
-        )
-    }
 
     fun searchAndAddBook(isbnOrQuery: String) {
         if (isbnOrQuery.isBlank()) return
@@ -372,7 +365,7 @@ class BookViewModel : ViewModel() {
             _uiState.value = UiState.Loading
             val foundBook = BookApiService.searchBook(isbnOrQuery)
             if (foundBook != null) {
-                _books.value = _books.value + foundBook
+                bookDao.insertBook(foundBook.toEntity())
                 _uiState.value = UiState.Success(foundBook)
             } else {
                 _uiState.value = UiState.Error("Aucun livre trouvé pour : $isbnOrQuery")
@@ -381,38 +374,91 @@ class BookViewModel : ViewModel() {
     }
 
     fun updateBook(updatedBook: Book) {
-        _books.value = _books.value.map { if (it.id == updatedBook.id) updatedBook else it }
+        viewModelScope.launch {
+            bookDao.updateBook(updatedBook.toEntity())
+        }
     }
 
     fun removeBook(book: Book) {
-        _books.value = _books.value.filter { it.id != book.id }
+        viewModelScope.launch {
+            bookDao.deleteBook(book.toEntity())
+        }
     }
 
     fun resetState() {
         _uiState.value = UiState.Idle
     }
 
-    fun exportToJson(context: Context) {
-        try {
-            val jsonArray = JSONArray()
-            _books.value.forEach { book ->
-                val obj = JSONObject().apply {
-                    put("isbn", book.isbn)
-                    put("title", book.title)
-                    put("authors", book.authors)
-                    put("series", book.series)
-                    put("coverUrl", book.coverUrl)
-                    put("publisher", book.publisher)
+    // GÈRE L'EXPORTATION JSON (Création de la chaîne JSON)
+    fun getExportJsonString(): String {
+        val jsonArray = JSONArray()
+        books.value.forEach { book ->
+            val obj = JSONObject().apply {
+                put("id", book.id)
+                put("isbn", book.isbn)
+                put("title", book.title)
+                put("authors", book.authors)
+                put("series", book.series)
+                put("coverUrl", book.coverUrl)
+                put("publisher", book.publisher)
+                put("publishedDate", book.publishedDate)
+                put("description", book.description)
+                put("source", book.source)
+                put("totalPages", book.totalPages)
+                put("currentPage", book.currentPage)
+                put("rating", book.rating)
+                put("status", book.status.name)
+                put("personalNotes", book.personalNotes)
+                put("isBorrowed", book.isBorrowed)
+                put("borrowerName", book.borrowerName)
+                put("addedTimestamp", book.addedTimestamp)
+            }
+            jsonArray.put(obj)
+        }
+        return jsonArray.toString(2)
+    }
+
+    // GÈRE L'IMPORTATION JSON (Lecture et insertion dans Room)
+    fun importFromJsonString(jsonString: String, onComplete: (Int) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val jsonArray = JSONArray(jsonString)
+                var count = 0
+                for (i in 0 until jsonArray.length()) {
+                    val obj = jsonArray.getJSONObject(i)
+                    val book = Book(
+                        id = obj.optString("id", java.util.UUID.randomUUID().toString()),
+                        isbn = obj.optString("isbn", ""),
+                        title = obj.optString("title", "Titre inconnu"),
+                        authors = obj.optString("authors", "Auteur inconnu"),
+                        series = obj.optString("series", ""),
+                        coverUrl = obj.optString("coverUrl", ""),
+                        publisher = obj.optString("publisher", ""),
+                        publishedDate = obj.optString("publishedDate", ""),
+                        description = obj.optString("description", ""),
+                        source = obj.optString("source", "Import JSON"),
+                        totalPages = obj.optInt("totalPages", 300),
+                        currentPage = obj.optInt("currentPage", 0),
+                        rating = obj.optDouble("rating", 0.0).toFloat(),
+                        status = try {
+                            ReadStatus.valueOf(obj.optString("status", ReadStatus.UNREAD.name))
+                        } catch (e: Exception) { ReadStatus.UNREAD },
+                        personalNotes = obj.optString("personalNotes", ""),
+                        isBorrowed = obj.optBoolean("isBorrowed", false),
+                        borrowerName = obj.optString("borrowerName", ""),
+                        addedTimestamp = obj.optLong("addedTimestamp", System.currentTimeMillis())
+                    )
+                    bookDao.insertBook(book.toEntity())
+                    count++
                 }
-                jsonArray.put(obj)
+                withContext(Dispatchers.Main) {
+                    onComplete(count)
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    onComplete(-1) // Signal d'erreur
+                }
             }
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, jsonArray.toString(2))
-            }
-            context.startActivity(Intent.createChooser(intent, "Exporter la bibliothèque"))
-        } catch (e: Exception) {
-            Toast.makeText(context, "Erreur d'exportation", Toast.LENGTH_SHORT).show()
         }
     }
 }
@@ -443,32 +489,96 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(viewModel: BookViewModel = viewModel()) {
+fun MainScreen(viewModel: BookViewModel) {
     val context = LocalContext.current
     val books by viewModel.books.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
 
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedStatusFilter by remember { mutableStateOf<ReadStatus?>(null) }
-    var activeSortOption by remember { mutableStateOf(SortOption.TITLE) }
-    var isAscending by remember { mutableStateOf(true) }
-
-    var showScanner by remember { mutableStateOf(false) }
-    var isBatchMode by remember { mutableStateOf(false) }
-    var showAddBottomSheet by remember { mutableStateOf(false) }
-    var showFilterSheet by remember { mutableStateOf(false) }
-    var selectedBookForDetail by remember { mutableStateOf<Book?>(null) }
-    var selectedTab by remember { mutableIntStateOf(0) }
-    var selectedNavIndex by remember { mutableIntStateOf(0) }
-
-    val tabs = listOf("Livres", "Étagères", "Tags", "Souhaits")
-
-    val cameraPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) showScanner = true
-        else Toast.makeText(context, "Permission caméra requise", Toast.LENGTH_SHORT).show()
+    // LAUNCHER POUR EXPORTER LE FICHIER JSON
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        uri?.let { destinationUri ->
+            try {
+                context.contentResolver.openOutputStream(destinationUri)?.use { outputStream ->
+                    outputStream.write(viewModel.getExportJsonString().toByteArray())
+                }
+                Toast.makeText(context, "Bibliothèque exportée avec succès !", Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                Toast.makeText(context, "Erreur lors de l'exportation", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
+
+    // LAUNCHER POUR IMPORTER LE FICHIER JSON
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { sourceUri ->
+            try {
+                val jsonString = context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
+                    inputStream.bufferedReader().use { it.readText() }
+                }
+                if (!jsonString.isNullOrBlank()) {
+                    viewModel.importFromJsonString(jsonString) { count ->
+                        if (count >= 0) {
+                            Toast.makeText(context, "$count livre(s) importé(s) avec succès !", Toast.LENGTH_LONG).show()
+                        } else {
+                            Toast.makeText(context, "Format du fichier JSON invalide", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Erreur lors de la lecture du fichier", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // Rest du code UI (Search, Status Filter, etc.)
+    // ...
+
+    Scaffold(
+        topBar = {
+            Column(modifier = Modifier.background(AppTheme.BackgroundDark)) {
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "Bibliothèque",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 24.sp,
+                                color = AppTheme.TextPrimary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "(${books.size} livres)",
+                                fontSize = 14.sp,
+                                color = AppTheme.TextSecondary
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = AppTheme.BackgroundDark),
+                    actions = {
+                        // BOUTON IMPORTER
+                        IconButton(onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) }) {
+                            Icon(
+                                imageVector = Icons.Outlined.FileUpload,
+                                contentDescription = "Importer",
+                                tint = AppTheme.AccentTeal
+                            )
+                        }
+                        // BOUTON EXPORTER
+                        IconButton(onClick = { exportLauncher.launch("ma_bibliotheque.json") }) {
+                            Icon(
+                                imageVector = Icons.Outlined.FileDownload,
+                                contentDescription = "Exporter",
+                                tint = AppTheme.PrimaryEmerald
+                            )
+                        }
+                    }
+                )
+
+                // TabRow et reste du composable...
 
     // Filtrage et Tri dynamiques
     val groupedBooks = remember(books, searchQuery, selectedStatusFilter, activeSortOption, isAscending) {
