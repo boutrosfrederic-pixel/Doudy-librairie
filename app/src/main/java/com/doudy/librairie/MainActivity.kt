@@ -21,7 +21,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -29,7 +28,6 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -41,11 +39,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -92,7 +90,7 @@ object AppTheme {
 }
 
 // ==========================================
-// 2. MODÈLES DE DONNÉES
+// 2. MODÈLES DE DONNÉES & STATISTIQUES
 // ==========================================
 enum class ReadStatus(val label: String) {
     READ("Lu"),
@@ -120,6 +118,21 @@ data class Book(
     val isBorrowed: Boolean = false,
     val borrowerName: String = "",
     val addedTimestamp: Long = System.currentTimeMillis()
+)
+
+data class ReadingGoal(
+    val targetBooks: Int = 12,
+    val year: Int = 2026
+)
+
+data class ReadingStats(
+    val totalBooks: Int,
+    val booksRead: Int,
+    val totalPagesRead: Int,
+    val topAuthor: String,
+    val averageRating: Float,
+    val wishlistCount: Int,
+    val borrowedCount: Int
 )
 
 // ==========================================
@@ -210,11 +223,9 @@ object BookApiService {
     suspend fun searchBook(query: String): Book? = withContext(Dispatchers.IO) {
         val cleanQuery = query.trim().replace("-", "")
         
-        // 1. Essai Google Books API
         val googleResult = searchGoogleBooks(cleanQuery)
         if (googleResult != null) return@withContext googleResult
 
-        // 2. Repli sur OpenLibrary API
         searchOpenLibrary(cleanQuery)
     }
 
@@ -247,8 +258,7 @@ object BookApiService {
                     var cover = ""
                     if (info.has("imageLinks")) {
                         val images = info.getJSONObject("imageLinks")
-                        cover = images.optString("thumbnail", "")
-                            .replace("http://", "https://")
+                        cover = images.optString("thumbnail", "").replace("http://", "https://")
                     }
 
                     Book(
@@ -358,6 +368,26 @@ class BookViewModel(private val bookDao: BookDao) : ViewModel() {
     val books: StateFlow<List<Book>> = bookDao.getAllBooks()
         .map { list -> list.map { it.toDomain() } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val readingStats: StateFlow<ReadingStats> = books.map { list ->
+        val readBooks = list.filter { it.status == ReadStatus.READ }
+        val pages = readBooks.sumOf { it.totalPages }
+        val topAuth = list.groupBy { it.authors }
+            .maxByOrNull { it.value.size }?.key ?: "Aucun"
+        val avgRating = if (readBooks.isNotEmpty()) {
+            readBooks.map { it.rating }.filter { it > 0 }.average().toFloat()
+        } else 0f
+
+        ReadingStats(
+            totalBooks = list.size,
+            booksRead = readBooks.size,
+            totalPagesRead = pages,
+            topAuthor = topAuth,
+            averageRating = if (avgRating.isNaN()) 0f else avgRating,
+            wishlistCount = list.count { it.status == ReadStatus.WISHLIST },
+            borrowedCount = list.count { it.isBorrowed }
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ReadingStats(0, 0, 0, "-", 0f, 0, 0))
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -511,22 +541,24 @@ class MainActivity : ComponentActivity() {
 }
 
 // ==========================================
-// 7. INTERFACE GRAPHIQUE COMPOSABLE
+// 7. INTERFACE GRAPHIQUE PRINCIPALE
 // ==========================================
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: BookViewModel) {
     val context = LocalContext.current
     val books by viewModel.books.collectAsState()
+    val stats by viewModel.readingStats.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
 
     var selectedStatusTab by remember { mutableStateOf<ReadStatus?>(null) }
     var searchQuery by remember { mutableStateOf("") }
-    var isGridView by remember { mutableStateOf(false) }
+    var isGridView by remember { mutableStateOf(true) }
 
     var selectedBookForDetail by remember { mutableStateOf<Book?>(null) }
     var showManualAddDialog by remember { mutableStateOf(false) }
     var showCameraScanner by remember { mutableStateOf(false) }
+    var showStatsDialog by remember { mutableStateOf(false) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
@@ -536,7 +568,7 @@ fun MainScreen(viewModel: BookViewModel) {
                 context.contentResolver.openOutputStream(destinationUri)?.use { outputStream ->
                     outputStream.write(viewModel.getExportJsonString().toByteArray())
                 }
-                Toast.makeText(context, "Bibliothèque exportée avec succès !", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "Bibliothèque exportée !", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 Toast.makeText(context, "Erreur lors de l'exportation", Toast.LENGTH_SHORT).show()
             }
@@ -554,14 +586,14 @@ fun MainScreen(viewModel: BookViewModel) {
                 if (!jsonString.isNullOrBlank()) {
                     viewModel.importFromJsonString(jsonString) { count ->
                         if (count >= 0) {
-                            Toast.makeText(context, "$count livre(s) importé(s) avec succès !", Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, "$count livre(s) importé(s) !", Toast.LENGTH_SHORT).show()
                         } else {
-                            Toast.makeText(context, "Format du fichier JSON invalide", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Fichier JSON invalide", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
             } catch (e: Exception) {
-                Toast.makeText(context, "Erreur lors de la lecture du fichier", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Erreur lors de l'importation", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -624,6 +656,13 @@ fun MainScreen(viewModel: BookViewModel) {
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = AppTheme.BackgroundDark),
                     actions = {
+                        IconButton(onClick = { showStatsDialog = true }) {
+                            Icon(
+                                imageVector = Icons.Default.BarChart,
+                                contentDescription = "Statistiques",
+                                tint = AppTheme.AccentAmber
+                            )
+                        }
                         IconButton(onClick = { isGridView = !isGridView }) {
                             Icon(
                                 imageVector = if (isGridView) Icons.Default.List else Icons.Default.GridView,
@@ -795,6 +834,13 @@ fun MainScreen(viewModel: BookViewModel) {
         )
     }
 
+    if (showStatsDialog) {
+        StatsDialog(
+            stats = stats,
+            onDismiss = { showStatsDialog = false }
+        )
+    }
+
     selectedBookForDetail?.let { book ->
         BookDetailDialog(
             book = book,
@@ -946,9 +992,238 @@ fun BookListItem(book: Book, onClick: () -> Unit) {
     }
 }
 
+fun extractVolumeNumber(title: String): Int {
+    val regex = Regex("""(?i)(?:tome|t|vol|volume|\bT|\bV)\s*[:.-]?\s*(\d+)""")
+    val match = regex.find(title)
+    return match?.groupValues?.get(1)?.toIntOrNull() ?: 999
+}
+
+@Composable
+fun BookGridItem(book: Book, onClick: () -> Unit) {
+    val volumeNum = remember(book.title) { extractVolumeNumber(book.title) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.68f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(AppTheme.CardBackground)
+                .border(1.dp, AppTheme.CardBorder, RoundedCornerShape(8.dp))
+        ) {
+            if (book.coverUrl.isNotBlank()) {
+                AsyncImage(
+                    model = book.coverUrl,
+                    contentDescription = book.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.MenuBook,
+                        contentDescription = null,
+                        tint = AppTheme.TextTertiary,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+            }
+
+            if (volumeNum != 999) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .background(
+                            color = AppTheme.AccentPurple,
+                            shape = RoundedCornerShape(topEnd = 6.dp, bottomStart = 8.dp)
+                        )
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "$volumeNum",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = book.title,
+            fontWeight = FontWeight.Medium,
+            fontSize = 12.sp,
+            color = AppTheme.TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
 // ==========================================
-// 9. DIALOGS (DÉTAILS, SCANNER, AJOUT MANUEL)
+// 9. DIALOGS & STATISTIQUES (PRIORITÉ 6)
 // ==========================================
+@Composable
+fun StatsDialog(
+    stats: ReadingStats,
+    goal: ReadingGoal = ReadingGoal(12, 2026),
+    onDismiss: () -> Unit
+) {
+    val progress = if (goal.targetBooks > 0) {
+        (stats.booksRead.toFloat() / goal.targetBooks.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = AppTheme.SurfaceDark)
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Statistiques ${goal.year}",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp,
+                        color = AppTheme.TextPrimary
+                    )
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Fermer", tint = AppTheme.TextSecondary)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = AppTheme.CardBackground),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("Objectif annuel", fontWeight = FontWeight.SemiBold, color = AppTheme.TextPrimary)
+                            Text("${stats.booksRead} / ${goal.targetBooks} livres", color = AppTheme.AccentTeal, fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                            color = AppTheme.PrimaryEmerald,
+                            trackColor = AppTheme.CardBorder
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StatCard(
+                        modifier = Modifier.weight(1f),
+                        title = "Pages lues",
+                        value = "${stats.totalPagesRead}",
+                        icon = Icons.Default.MenuBook,
+                        tint = AppTheme.AccentPurple
+                    )
+                    StatCard(
+                        modifier = Modifier.weight(1f),
+                        title = "Note moyenne",
+                        value = if (stats.averageRating > 0) "★ ${String.format("%.1f", stats.averageRating)}" else "-",
+                        icon = Icons.Default.Star,
+                        tint = AppTheme.AccentAmber
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StatCard(
+                        modifier = Modifier.weight(1f),
+                        title = "Livres prêtés",
+                        value = "${stats.borrowedCount}",
+                        icon = Icons.Default.Outbox,
+                        tint = AppTheme.AccentRose
+                    )
+                    StatCard(
+                        modifier = Modifier.weight(1f),
+                        title = "Envies (Wishlist)",
+                        value = "${stats.wishlistCount}",
+                        icon = Icons.Default.Bookmark,
+                        tint = AppTheme.AccentTeal
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = AppTheme.CardBackground),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Person, contentDescription = null, tint = AppTheme.PrimaryEmerald)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text("Auteur le plus présent", fontSize = 12.sp, color = AppTheme.TextSecondary)
+                            Text(stats.topAuthor, fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StatCard(
+    modifier: Modifier = Modifier,
+    title: String,
+    value: String,
+    icon: ImageVector,
+    tint: Color
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = AppTheme.CardBackground),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(value, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary)
+            Text(title, fontSize = 11.sp, color = AppTheme.TextSecondary)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BookDetailDialog(
     book: Book,
@@ -1175,7 +1450,6 @@ fun ManualAddBookDialog(onDismiss: () -> Unit, onAdd: (Book) -> Unit) {
 
 @Composable
 fun BarcodeScannerDialog(onDismiss: () -> Unit, onBarcodeScanned: (String) -> Unit) {
-    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
     Dialog(onDismissRequest = onDismiss) {
@@ -1267,85 +1541,5 @@ private fun processImageProxy(
             }
     } else {
         imageProxy.close()
-    }
-}
-
-// ==========================================
-// 10. UTILS & GRID ITEM
-// ==========================================
-fun extractVolumeNumber(title: String): Int {
-    val regex = Regex("""(?i)(?:tome|t|vol|volume|\bT|\bV)\s*[:.-]?\s*(\d+)""")
-    val match = regex.find(title)
-    return match?.groupValues?.get(1)?.toIntOrNull() ?: 999
-}
-
-@Composable
-fun BookGridItem(book: Book, onClick: () -> Unit) {
-    val volumeNum = remember(book.title) { extractVolumeNumber(book.title) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(0.68f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(AppTheme.CardBackground)
-                .border(1.dp, AppTheme.CardBorder, RoundedCornerShape(8.dp))
-        ) {
-            if (book.coverUrl.isNotBlank()) {
-                AsyncImage(
-                    model = book.coverUrl,
-                    contentDescription = book.title,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
-            } else {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Default.MenuBook,
-                        contentDescription = null,
-                        tint = AppTheme.TextTertiary,
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
-            }
-
-            if (volumeNum != 999) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .background(
-                            color = AppTheme.AccentPurple,
-                            shape = RoundedCornerShape(topEnd = 6.dp, bottomStart = 8.dp)
-                        )
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text(
-                        text = "$volumeNum",
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        Text(
-            text = book.title,
-            fontWeight = FontWeight.Medium,
-            fontSize = 12.sp,
-            color = AppTheme.TextPrimary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
     }
 }
