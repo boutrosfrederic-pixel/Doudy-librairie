@@ -1449,6 +1449,13 @@ fun SeriesGridHeader(seriesName: String, count: Int) {
     }
 }
 
+// Fonction utilitaire pour extraire le numéro de tome depuis le titre
+fun extractVolumeNumber(title: String): Int {
+    val regex = Regex("""(?i)(?:tome|t|vol|volume|\bT|\bV)\s*[:.-]?\s*(\d+)""")
+    val match = regex.find(title)
+    return match?.groupValues?.get(1)?.toIntOrNull() ?: 999
+}
+
 @Composable
 fun BookGridItem(book: Book, onClick: () -> Unit) {
     val volumeNum = remember(book.title) { extractVolumeNumber(book.title) }
