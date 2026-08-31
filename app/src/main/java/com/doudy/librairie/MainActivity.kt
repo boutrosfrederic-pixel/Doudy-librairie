@@ -28,8 +28,6 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -38,15 +36,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -84,7 +79,7 @@ object AppTheme {
 
     val PrimaryEmerald = Color(0xFF10B981)
     val AccentTeal = Color(0xFF06B6D4)
-    val AccentPurple = Color(0xFF8B5CF6) // Couleur du badge de volume
+    val AccentPurple = Color(0xFF8B5CF6)
     val AccentRose = Color(0xFFF43F5E)
 
     val TextPrimary = Color(0xFFF8FAFC)
@@ -109,7 +104,7 @@ data class Book(
 )
 
 // ==========================================
-// 3. FONCTIONS UTILITAIRES DE SÉRIES & STRIP
+// 3. FONCTIONS UTILITAIRES DE SÉRIES
 // ==========================================
 fun extractSeriesFromTitle(title: String): String {
     if (title.isBlank()) return "Hors série"
@@ -152,7 +147,7 @@ fun extractVolumeNumber(title: String): Int {
 }
 
 // ==========================================
-// 4. API DE RECHERCHE DÉCOUPLÉE
+// 4. API DE RECHERCHE
 // ==========================================
 object BookApiService {
     suspend fun searchBook(isbnOrTitle: String): Book? = withContext(Dispatchers.IO) {
@@ -374,7 +369,7 @@ class BookViewModel : ViewModel() {
 }
 
 // ==========================================
-// 6. ACTIVITÉ PRINCIPALE ET ÉCRAN
+// 6. ACTIVITÉ PRINCIPALE
 // ==========================================
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -405,19 +400,19 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
     val uiState by viewModel.uiState.collectAsState()
 
     var searchQuery by remember { mutableStateOf("") }
-    var inputQuery by remember { mutableStateOf("") }
     var showScanner by remember { mutableStateOf(false) }
+    var isBatchMode by remember { mutableStateOf(false) }
+    var showAddBottomSheet by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableIntStateOf(0) }
     var selectedNavIndex by remember { mutableIntStateOf(0) }
 
     val tabs = listOf("Livres", "Étagères", "Tags", "Souhaits")
-    val keyboardController = LocalSoftwareKeyboardController.current
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) showScanner = true
-        else Toast.makeText(context, "Permission caméra requise pour scanner", Toast.LENGTH_SHORT).show()
+        else Toast.makeText(context, "Permission caméra requise", Toast.LENGTH_SHORT).show()
     }
 
     val groupedBooks = remember(books, searchQuery) {
@@ -478,7 +473,6 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                     }
                 )
 
-                // Onglets Supérieurs (Livres, Étagères...)
                 TabRow(
                     selectedTabIndex = selectedTab,
                     containerColor = AppTheme.BackgroundDark,
@@ -527,14 +521,7 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                 )
                 NavigationBarItem(
                     selected = false,
-                    onClick = {
-                        val permissionCheck = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
-                        if (permissionCheck == PackageManager.PERMISSION_GRANTED) {
-                            showScanner = true
-                        } else {
-                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                        }
-                    },
+                    onClick = { showAddBottomSheet = true },
                     icon = {
                         Box(
                             modifier = Modifier
@@ -575,63 +562,6 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                 .padding(paddingValues)
                 .padding(horizontal = 12.dp)
         ) {
-            // Barre d'Ajout Manuelle
-            Card(
-                colors = CardDefaults.cardColors(containerColor = AppTheme.SurfaceDark),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 6.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = {
-                        val permissionCheck = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
-                        if (permissionCheck == PackageManager.PERMISSION_GRANTED) {
-                            showScanner = true
-                        } else {
-                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                        }
-                    }) {
-                        Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan", tint = AppTheme.PrimaryEmerald)
-                    }
-
-                    OutlinedTextField(
-                        value = inputQuery,
-                        onValueChange = { inputQuery = it },
-                        placeholder = { Text("ISBN ou Titre...", color = AppTheme.TextTertiary, fontSize = 14.sp) },
-                        modifier = Modifier.weight(1f),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color.Transparent,
-                            unfocusedBorderColor = Color.Transparent,
-                            focusedTextColor = AppTheme.TextPrimary
-                        ),
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = {
-                            viewModel.searchAndAddBook(inputQuery)
-                            inputQuery = ""
-                            keyboardController?.hide()
-                        })
-                    )
-
-                    Button(
-                        onClick = {
-                            viewModel.searchAndAddBook(inputQuery)
-                            inputQuery = ""
-                            keyboardController?.hide()
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = AppTheme.PrimaryEmerald),
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Text("Ajouter", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    }
-                }
-            }
-
             AnimatedVisibility(visible = uiState !is UiState.Idle) {
                 when (uiState) {
                     is UiState.Loading -> {
@@ -665,11 +595,11 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                 }
             }
 
-            // Boutons de Filtre et Recherche
+            // Barre de Filtre & Recherche
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 6.dp),
+                    .padding(vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 OutlinedTextField(
@@ -721,15 +651,13 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                     modifier = Modifier.fillMaxSize(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
-                    contentPadding = PaddingValues(bottom = 16.dp, top = 8.dp)
+                    contentPadding = PaddingValues(bottom = 16.dp, top = 4.dp)
                 ) {
                     groupedBooks.forEach { (seriesName, seriesBooks) ->
-                        // En-tête de série occupant les 3 colonnes
                         item(span = { GridItemSpan(3) }) {
                             SeriesGridHeader(seriesName = seriesName, count = seriesBooks.size)
                         }
 
-                        // Éléments de la grille
                         items(seriesBooks, key = { it.id }) { book ->
                             BookGridItem(book = book, onDelete = { viewModel.removeBook(book) })
                         }
@@ -739,6 +667,60 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
         }
     }
 
+    // Modal Bottom Sheet (Menu d'Ajout)
+    if (showAddBottomSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showAddBottomSheet = false },
+            containerColor = AppTheme.SurfaceDark,
+            scrimColor = Color.Black.copy(alpha = 0.6f)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 24.dp, top = 8.dp)
+            ) {
+                AddOptionItem(
+                    icon = Icons.Default.QrCodeScanner,
+                    title = "Scanner le livre ISBN",
+                    onClick = {
+                        showAddBottomSheet = false
+                        isBatchMode = false
+                        val permissionCheck = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                        if (permissionCheck == PackageManager.PERMISSION_GRANTED) showScanner = true
+                        else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                    }
+                )
+                AddOptionItem(
+                    icon = Icons.Default.DocumentScanner,
+                    title = "Scanner plusieurs livres",
+                    onClick = {
+                        showAddBottomSheet = false
+                        isBatchMode = true
+                        val permissionCheck = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                        if (permissionCheck == PackageManager.PERMISSION_GRANTED) showScanner = true
+                        else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                    }
+                )
+                AddOptionItem(
+                    icon = Icons.Default.Search,
+                    title = "Rechercher de nouveaux livres",
+                    onClick = { showAddBottomSheet = false }
+                )
+                AddOptionItem(
+                    icon = Icons.Default.Edit,
+                    title = "Ajouter un nouveau livre manuellement",
+                    onClick = { showAddBottomSheet = false }
+                )
+                AddOptionItem(
+                    icon = Icons.Default.EmojiEvents,
+                    title = "Ajouter un nouvel objectif de lecture",
+                    onClick = { showAddBottomSheet = false }
+                )
+            }
+        }
+    }
+
+    // Modal Scanner Caméra
     if (showScanner) {
         Dialog(onDismissRequest = { showScanner = false }) {
             Card(
@@ -750,8 +732,9 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     CameraBarcodeScanner(
                         onBarcodeScanned = { barcode ->
-                            showScanner = false
+                            if (!isBatchMode) showScanner = false
                             viewModel.searchAndAddBook(barcode)
+                            Toast.makeText(context, "Scan : $barcode", Toast.LENGTH_SHORT).show()
                         }
                     )
                     IconButton(
@@ -768,6 +751,35 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
     }
 }
 
+@Composable
+fun AddOptionItem(
+    icon: ImageVector,
+    title: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = AppTheme.TextSecondary,
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Text(
+            text = title,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            color = AppTheme.TextPrimary
+        )
+    }
+}
+
 // ==========================================
 // 7. MODULE SCANNER CAMERA ML KIT
 // ==========================================
@@ -775,7 +787,7 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
 fun CameraBarcodeScanner(onBarcodeScanned: (String) -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    var isScanned by remember { mutableStateOf(false) }
+    var lastScannedTime by remember { mutableLongStateOf(0L) }
 
     AndroidView(
         factory = { ctx ->
@@ -795,8 +807,9 @@ fun CameraBarcodeScanner(onBarcodeScanned: (String) -> Unit) {
 
                 imageAnalysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
                     processImageProxy(barcodeScanner, imageProxy) { barcode ->
-                        if (!isScanned) {
-                            isScanned = true
+                        val now = System.currentTimeMillis()
+                        if (now - lastScannedTime > 2000) {
+                            lastScannedTime = now
                             onBarcodeScanned(barcode)
                         }
                     }
@@ -885,7 +898,7 @@ fun BookGridItem(book: Book, onDelete: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { /* Ouvre la fiche détail plus tard */ }
+            .clickable { }
     ) {
         Box(
             modifier = Modifier
@@ -916,7 +929,6 @@ fun BookGridItem(book: Book, onDelete: () -> Unit) {
                 }
             }
 
-            // Badge du numéro de volume (Superposé en bas à gauche)
             if (volumeNum != 999) {
                 Box(
                     modifier = Modifier
@@ -939,7 +951,6 @@ fun BookGridItem(book: Book, onDelete: () -> Unit) {
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        // Titre sous la couverture
         Text(
             text = book.title,
             fontWeight = FontWeight.Medium,
