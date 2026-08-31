@@ -44,9 +44,10 @@ dependencies {
     // Core & Lifecycle
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
-    
-    // Dépendance manquante pour le viewModel() dans Compose
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
+
+    // Coroutines (Nécessaire pour kotlinx.coroutines.*)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     // Jetpack Compose (BOM)
     implementation(platform("androidx.compose:compose-bom:2024.02.00"))
@@ -55,10 +56,11 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
 
-    // Room
-    implementation("androidx.room:room-runtime:2.6.1")
-    implementation("androidx.room:room-ktx:2.6.1")
-    ksp("androidx.room:room-compiler:2.6.1")
+    // Room (Traité avec KSP)
+    val roomVersion = "2.6.1"
+    implementation("androidx.room:room-runtime:$roomVersion")
+    implementation("androidx.room:room-ktx:$roomVersion")
+    ksp("androidx.room:room-compiler:$roomVersion")
 
     // CameraX & ML Kit
     implementation("androidx.camera:camera-core:1.3.4")
