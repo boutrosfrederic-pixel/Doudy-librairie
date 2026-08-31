@@ -26,8 +26,10 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
@@ -42,6 +44,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -81,6 +84,7 @@ object AppTheme {
     val AccentTeal = Color(0xFF06B6D4)
     val AccentPurple = Color(0xFF8B5CF6)
     val AccentRose = Color(0xFFF43F5E)
+    val AccentAmber = Color(0xFFF59E0B)
 
     val TextPrimary = Color(0xFFF8FAFC)
     val TextSecondary = Color(0xFF94A3B8)
@@ -88,8 +92,15 @@ object AppTheme {
 }
 
 // ==========================================
-// 2. MODÈLE DE DONNÉES
+// 2. MODÈLE DE DONNÉES ENRICHI
 // ==========================================
+enum class ReadStatus(val label: String) {
+    UNREAD("Non lu"),
+    READING("En cours"),
+    READ("Terminé"),
+    ABANDONED("Abandonné")
+}
+
 data class Book(
     val id: String = java.util.UUID.randomUUID().toString(),
     val isbn: String,
@@ -100,7 +111,14 @@ data class Book(
     val publisher: String = "",
     val publishedDate: String = "",
     val description: String = "",
-    val source: String = "Inconnu"
+    val source: String = "Inconnu",
+    val totalPages: Int = 300,
+    val currentPage: Int = 0,
+    val rating: Float = 0f,
+    val status: ReadStatus = ReadStatus.UNREAD,
+    val personalNotes: String = "",
+    val isBorrowed: Boolean = false,
+    val borrowerName: String = ""
 )
 
 // ==========================================
@@ -186,6 +204,7 @@ object BookApiService {
             val publishers = bookObj.optJSONArray("publishers")
             val publisher = if (publishers != null && publishers.length() > 0) publishers.getJSONObject(0).optString("name") else ""
             val publishDate = bookObj.optString("publish_date", "")
+            val pages = bookObj.optInt("number_of_pages", 300)
 
             Book(
                 isbn = isbn,
@@ -195,7 +214,8 @@ object BookApiService {
                 coverUrl = coverUrl,
                 publisher = publisher,
                 publishedDate = publishDate,
-                source = "Open Library"
+                source = "Open Library",
+                totalPages = pages
             )
         } catch (e: Exception) { null }
     }
@@ -228,6 +248,7 @@ object BookApiService {
             val publisher = volumeInfo.optString("publisher", "")
             val publishedDate = volumeInfo.optString("publishedDate", "")
             val description = volumeInfo.optString("description", "")
+            val pageCount = volumeInfo.optInt("pageCount", 300)
 
             val industryIds = volumeInfo.optJSONArray("industryIdentifiers")
             var isbn = ""
@@ -250,7 +271,8 @@ object BookApiService {
                 publisher = publisher,
                 publishedDate = publishedDate,
                 description = description,
-                source = "Google Books"
+                source = "Google Books",
+                totalPages = pageCount
             )
         } catch (e: Exception) { null }
     }
@@ -314,10 +336,10 @@ class BookViewModel : ViewModel() {
 
     init {
         _books.value = listOf(
-            Book(isbn = "9782253003854", title = "L'Attaque des Titans - Tome 1", authors = "Hajime Isayama", series = "L'Attaque des Titans", coverUrl = "https://covers.openlibrary.org/b/id/10523456-M.jpg"),
-            Book(isbn = "9782253003861", title = "L'Attaque des Titans - Tome 10", authors = "Hajime Isayama", series = "L'Attaque des Titans", coverUrl = "https://covers.openlibrary.org/b/id/10523457-M.jpg"),
-            Book(isbn = "9782253003878", title = "L'Attaque des Titans - Tome 2", authors = "Hajime Isayama", series = "L'Attaque des Titans", coverUrl = "https://covers.openlibrary.org/b/id/10523458-M.jpg"),
-            Book(isbn = "9782070360024", title = "L'Étranger", authors = "Albert Camus", series = "Hors série")
+            Book(isbn = "9782253003854", title = "L'Attaque des Titans - Tome 1", authors = "Hajime Isayama", series = "L'Attaque des Titans", coverUrl = "https://covers.openlibrary.org/b/id/10523456-M.jpg", totalPages = 192, currentPage = 120, rating = 4.5f, status = ReadStatus.READING),
+            Book(isbn = "9782253003861", title = "L'Attaque des Titans - Tome 10", authors = "Hajime Isayama", series = "L'Attaque des Titans", coverUrl = "https://covers.openlibrary.org/b/id/10523457-M.jpg", totalPages = 192, currentPage = 0, status = ReadStatus.UNREAD),
+            Book(isbn = "9782253003878", title = "L'Attaque des Titans - Tome 2", authors = "Hajime Isayama", series = "L'Attaque des Titans", coverUrl = "https://covers.openlibrary.org/b/id/10523458-M.jpg", totalPages = 192, currentPage = 192, rating = 5.0f, status = ReadStatus.READ),
+            Book(isbn = "9782070360024", title = "L'Étranger", authors = "Albert Camus", series = "Hors série", totalPages = 184, currentPage = 184, rating = 4.0f, status = ReadStatus.READ)
         )
     }
 
@@ -333,6 +355,10 @@ class BookViewModel : ViewModel() {
                 _uiState.value = UiState.Error("Aucun livre trouvé pour : $isbnOrQuery")
             }
         }
+    }
+
+    fun updateBook(updatedBook: Book) {
+        _books.value = _books.value.map { if (it.id == updatedBook.id) updatedBook else it }
     }
 
     fun removeBook(book: Book) {
@@ -403,6 +429,7 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
     var showScanner by remember { mutableStateOf(false) }
     var isBatchMode by remember { mutableStateOf(false) }
     var showAddBottomSheet by remember { mutableStateOf(false) }
+    var selectedBookForDetail by remember { mutableStateOf<Book?>(null) }
     var selectedTab by remember { mutableIntStateOf(0) }
     var selectedNavIndex by remember { mutableIntStateOf(0) }
 
@@ -659,12 +686,31 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
                         }
 
                         items(seriesBooks, key = { it.id }) { book ->
-                            BookGridItem(book = book, onDelete = { viewModel.removeBook(book) })
+                            BookGridItem(
+                                book = book,
+                                onClick = { selectedBookForDetail = book }
+                            )
                         }
                     }
                 }
             }
         }
+    }
+
+    // Bottom Sheet de Fiche Détaillée
+    if (selectedBookForDetail != null) {
+        BookDetailSheet(
+            book = selectedBookForDetail!!,
+            onDismiss = { selectedBookForDetail = null },
+            onUpdate = { updated ->
+                viewModel.updateBook(updated)
+                selectedBookForDetail = updated
+            },
+            onDelete = {
+                viewModel.removeBook(selectedBookForDetail!!)
+                selectedBookForDetail = null
+            }
+        )
     }
 
     // Modal Bottom Sheet (Menu d'Ajout)
@@ -751,6 +797,296 @@ fun MainScreen(viewModel: BookViewModel = viewModel()) {
     }
 }
 
+// ==========================================
+// 7. COMPOSANT FICHE DÉTAILLÉE DU LIVRE
+// ==========================================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BookDetailSheet(
+    book: Book,
+    onDismiss: () -> Unit,
+    onUpdate: (Book) -> Unit,
+    onDelete: () -> Unit
+) {
+    var detailTab by remember { mutableIntStateOf(0) } // 0: Notes, 1: Info
+    val volumeNum = remember(book.title) { extractVolumeNumber(book.title) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = AppTheme.BackgroundDark,
+        scrimColor = Color.Black.copy(alpha = 0.7f),
+        modifier = Modifier.fillMaxHeight(0.92f)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            // En-tête : Couverture et Infos Principales
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(110.dp)
+                        .height(160.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(AppTheme.CardBackground)
+                        .border(1.dp, AppTheme.CardBorder, RoundedCornerShape(8.dp))
+                ) {
+                    if (book.coverUrl.isNotBlank()) {
+                        AsyncImage(
+                            model = book.coverUrl,
+                            contentDescription = book.title,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.MenuBook,
+                            contentDescription = null,
+                            tint = AppTheme.TextTertiary,
+                            modifier = Modifier.size(40.dp).align(Alignment.Center)
+                        )
+                    }
+
+                    if (volumeNum != 999) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .background(AppTheme.AccentPurple, RoundedCornerShape(topEnd = 6.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text("$volumeNum", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = book.title,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = AppTheme.TextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = book.authors,
+                        fontSize = 14.sp,
+                        color = AppTheme.TextSecondary
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Rating étoiles
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        repeat(5) { index ->
+                            val isStarFilled = index < book.rating.toInt()
+                            Icon(
+                                imageVector = if (isStarFilled) Icons.Default.Star else Icons.Outlined.StarBorder,
+                                contentDescription = null,
+                                tint = if (isStarFilled) AppTheme.AccentAmber else AppTheme.TextTertiary,
+                                modifier = Modifier
+                                    .size(20.dp)
+                                    .clickable { onUpdate(book.copy(rating = (index + 1).toFloat())) }
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (book.rating > 0) "${book.rating}" else "Noter",
+                            fontSize = 12.sp,
+                            color = AppTheme.TextSecondary
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Badge de Série
+                    Surface(
+                        color = AppTheme.SurfaceDark,
+                        shape = RoundedCornerShape(6.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, AppTheme.CardBorder)
+                    ) {
+                        Text(
+                            text = book.series.ifBlank { "Hors série" },
+                            fontSize = 11.sp,
+                            color = AppTheme.AccentTeal,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Onglets de la Fiche Détaillée
+            TabRow(
+                selectedTabIndex = detailTab,
+                containerColor = AppTheme.SurfaceDark,
+                contentColor = AppTheme.PrimaryEmerald,
+                modifier = Modifier.clip(RoundedCornerShape(8.dp))
+            ) {
+                Tab(
+                    selected = detailTab == 0,
+                    onClick = { detailTab = 0 },
+                    text = { Text("Notes & Suivi", fontSize = 13.sp) }
+                )
+                Tab(
+                    selected = detailTab == 1,
+                    onClick = { detailTab = 1 },
+                    text = { Text("Informations", fontSize = 13.sp) }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (detailTab == 0) {
+                // CONTENU ONGLET 1 : SUIVI DE LECTURE & PROGRESSION
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = AppTheme.SurfaceDark),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Progression", fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary)
+                            Text(
+                                "${book.currentPage} / ${book.totalPages} pages",
+                                fontSize = 13.sp,
+                                color = AppTheme.PrimaryEmerald,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Slider(
+                            value = book.currentPage.toFloat(),
+                            onValueChange = { newPage ->
+                                val newStatus = when {
+                                    newPage.toInt() == 0 -> ReadStatus.UNREAD
+                                    newPage.toInt() >= book.totalPages -> ReadStatus.READ
+                                    else -> ReadStatus.READING
+                                }
+                                onUpdate(book.copy(currentPage = newPage.toInt(), status = newStatus))
+                            },
+                            valueRange = 0f..book.totalPages.toFloat().coerceAtLeast(1f),
+                            colors = SliderDefaults.colors(
+                                thumbColor = AppTheme.PrimaryEmerald,
+                                activeTrackColor = AppTheme.PrimaryEmerald,
+                                inactiveTrackColor = AppTheme.CardBorder
+                            )
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Chips de Statut
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ReadStatus.values().forEach { status ->
+                                FilterChip(
+                                    selected = book.status == status,
+                                    onClick = {
+                                        val page = if (status == ReadStatus.READ) book.totalPages else book.currentPage
+                                        onUpdate(book.copy(status = status, currentPage = page))
+                                    },
+                                    label = { Text(status.label, fontSize = 11.sp) },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = AppTheme.PrimaryEmerald,
+                                        selectedLabelColor = Color.Black
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Zone de Notes personnelles
+                OutlinedTextField(
+                    value = book.personalNotes,
+                    onValueChange = { onUpdate(book.copy(personalNotes = it)) },
+                    placeholder = { Text("Ajouter des remarques ou des citations...", color = AppTheme.TextTertiary, fontSize = 13.sp) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(110.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AppTheme.PrimaryEmerald,
+                        unfocusedBorderColor = AppTheme.CardBorder,
+                        focusedTextColor = AppTheme.TextPrimary
+                    )
+                )
+            } else {
+                // CONTENU ONGLET 2 : INFORMATIONS COMPLÈTES
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = AppTheme.SurfaceDark),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        InfoRow(label = "ISBN", value = book.isbn.ifBlank { "N/A" })
+                        InfoRow(label = "Éditeur", value = book.publisher.ifBlank { "Inconnu" })
+                        InfoRow(label = "Publication", value = book.publishedDate.ifBlank { "Inconnue" })
+                        InfoRow(label = "Source", value = book.source)
+                        InfoRow(label = "Total Pages", value = "${book.totalPages}")
+                        InfoRow(
+                            label = "Statut Prêt",
+                            value = if (book.isBorrowed) "Prêté à ${book.borrowerName}" else "Non prêté"
+                        )
+                    }
+                }
+
+                if (book.description.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("Résumé", fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary, fontSize = 14.sp)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(book.description, fontSize = 12.sp, color = AppTheme.TextSecondary, textAlign = TextAlign.Justify)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Actions : Supprimer
+            OutlinedButton(
+                onClick = onDelete,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = AppTheme.AccentRose),
+                border = androidx.compose.foundation.BorderStroke(1.dp, AppTheme.AccentRose),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Supprimer ce livre")
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+        }
+    }
+}
+
+@Composable
+fun InfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, color = AppTheme.TextTertiary, fontSize = 13.sp)
+        Text(value, color = AppTheme.TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+// ==========================================
+// 8. AUTRES COMPOSANTS (OPTIONS & CAMERA)
+// ==========================================
 @Composable
 fun AddOptionItem(
     icon: ImageVector,
@@ -780,9 +1116,6 @@ fun AddOptionItem(
     }
 }
 
-// ==========================================
-// 7. MODULE SCANNER CAMERA ML KIT
-// ==========================================
 @Composable
 fun CameraBarcodeScanner(onBarcodeScanned: (String) -> Unit) {
     val context = LocalContext.current
@@ -857,9 +1190,6 @@ private fun processImageProxy(
     }
 }
 
-// ==========================================
-// 8. COMPOSANTS DE LA GRILLE & VIGNETTES
-// ==========================================
 @Composable
 fun SeriesGridHeader(seriesName: String, count: Int) {
     Row(
@@ -892,13 +1222,13 @@ fun SeriesGridHeader(seriesName: String, count: Int) {
 }
 
 @Composable
-fun BookGridItem(book: Book, onDelete: () -> Unit) {
+fun BookGridItem(book: Book, onClick: () -> Unit) {
     val volumeNum = remember(book.title) { extractVolumeNumber(book.title) }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { }
+            .clickable { onClick() }
     ) {
         Box(
             modifier = Modifier
