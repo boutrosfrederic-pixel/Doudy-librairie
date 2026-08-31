@@ -2,14 +2,13 @@ package com.doudy.librairie
 
 import android.Manifest
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -18,14 +17,17 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.*
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,7 +41,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -52,80 +53,57 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.room.Dao
-import androidx.room.Database
-import androidx.room.Delete
-import androidx.room.Entity
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.PrimaryKey
-import androidx.room.Query
-import androidx.room.Room
-import androidx.room.RoomDatabase
-import androidx.room.Update
+import androidx.room.*
 import coil.compose.AsyncImage
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.URLEncoder
 import java.util.concurrent.Executors
 
 // ==========================================
-// 1. PALETTE DE COULEURS PERSONNALISÉE
+// 1. THÈME ET COULEURS (Dark Mode Premium)
 // ==========================================
 object AppTheme {
-    val BackgroundDark = Color(0xFF12131C)
-    val SurfaceDark = Color(0xFF1E1F2C)
-    val CardBackground = Color(0xFF2A2C3E)
-    val CardBorder = Color(0xFF3A3D54)
+    val BackgroundDark = Color(0xFF121212)
+    val SurfaceDark = Color(0xFF1E1E1E)
+    val CardBackground = Color(0xFF252525)
+    val CardBorder = Color(0xFF333333)
 
     val PrimaryEmerald = Color(0xFF10B981)
-    val AccentTeal = Color(0xFF06B6D4)
     val AccentPurple = Color(0xFF8B5CF6)
-    val AccentRose = Color(0xFFF43F5E)
+    val AccentTeal = Color(0xFF14B8A6)
     val AccentAmber = Color(0xFFF59E0B)
+    val AccentRose = Color(0xFFEF4444)
 
-    val TextPrimary = Color(0xFFF8FAFC)
-    val TextSecondary = Color(0xFF94A3B8)
-    val TextTertiary = Color(0xFF64748B)
+    val TextPrimary = Color(0xFFEEEEEE)
+    val TextSecondary = Color(0xFFA0A0A0)
+    val TextTertiary = Color(0xFF666666)
 }
 
 // ==========================================
-// 2. ENUMS DE FILTRES ET TRIS
+// 2. MODÈLES DE DONNÉES
 // ==========================================
 enum class ReadStatus(val label: String) {
-    UNREAD("Non lu"),
+    READ("Lu"),
     READING("En cours"),
-    READ("Terminé"),
-    ABANDONED("Abandonné")
+    UNREAD("À lire"),
+    WISHLIST("Envie")
 }
 
-enum class SortOption(val label: String) {
-    TITLE("Titre"),
-    AUTHOR("Auteur"),
-    RATING("Note"),
-    PROGRESS("Progression"),
-    DATE_ADDED("Date d'ajout")
-}
-
-// ==========================================
-// 3. MODÈLE DE DONNÉES ENRICHI
-// ==========================================
 data class Book(
     val id: String = java.util.UUID.randomUUID().toString(),
-    val isbn: String,
+    val isbn: String = "",
     val title: String,
     val authors: String,
     val series: String = "",
@@ -133,8 +111,8 @@ data class Book(
     val publisher: String = "",
     val publishedDate: String = "",
     val description: String = "",
-    val source: String = "Inconnu",
-    val totalPages: Int = 300,
+    val source: String = "Manuel",
+    val totalPages: Int = 0,
     val currentPage: Int = 0,
     val rating: Float = 0f,
     val status: ReadStatus = ReadStatus.UNREAD,
@@ -145,203 +123,228 @@ data class Book(
 )
 
 // ==========================================
-// 4. FONCTIONS UTILITAIRES DE SÉRIES
+// 3. ROOM DATABASE (ENTITÉ ET DAO)
 // ==========================================
-fun extractSeriesFromTitle(title: String): String {
-    if (title.isBlank()) return "Hors série"
-    val clean = title.trim()
+@Entity(tableName = "books")
+data class BookEntity(
+    @PrimaryKey val id: String,
+    val isbn: String,
+    val title: String,
+    val authors: String,
+    val series: String,
+    val coverUrl: String,
+    val publisher: String,
+    val publishedDate: String,
+    val description: String,
+    val source: String,
+    val totalPages: Int,
+    val currentPage: Int,
+    val rating: Float,
+    val status: String,
+    val personalNotes: String,
+    val isBorrowed: Boolean,
+    val borrowerName: String,
+    val addedTimestamp: Long
+)
 
-    val seriesPatterns = listOf(
-        Regex("""(?i)^(.*?)\s*[\(\[\-,:\_]?\s*(?:Tome|T\.|T|Volume|Vol\.|Vol|Book|Saison|S)\s*\d+"""),
-        Regex("""(?i)^(.*?)\s*[\(\[]\s*T\d+\s*[\)\]]"""),
-        Regex("""(?i)^(.*?)\s*:\s*.*"""),
-        Regex("""^(.*?)\s+#\d+""")
-    )
+fun Book.toEntity(): BookEntity = BookEntity(
+    id = id, isbn = isbn, title = title, authors = authors, series = series,
+    coverUrl = coverUrl, publisher = publisher, publishedDate = publishedDate,
+    description = description, source = source, totalPages = totalPages,
+    currentPage = currentPage, rating = rating, status = status.name,
+    personalNotes = personalNotes, isBorrowed = isBorrowed, borrowerName = borrowerName,
+    addedTimestamp = addedTimestamp
+)
 
-    for (pattern in seriesPatterns) {
-        val match = pattern.find(clean)
-        if (match != null) {
-            val candidate = match.groupValues[1]
-                .replace(Regex("""[,\-:_#(\[\s]+$"""), "")
-                .trim()
-            if (candidate.length >= 2) return candidate
-        }
-    }
-    return "Hors série"
+fun BookEntity.toDomain(): Book = Book(
+    id = id, isbn = isbn, title = title, authors = authors, series = series,
+    coverUrl = coverUrl, publisher = publisher, publishedDate = publishedDate,
+    description = description, source = source, totalPages = totalPages,
+    currentPage = currentPage, rating = rating,
+    status = try { ReadStatus.valueOf(status) } catch (e: Exception) { ReadStatus.UNREAD },
+    personalNotes = personalNotes, isBorrowed = isBorrowed, borrowerName = borrowerName,
+    addedTimestamp = addedTimestamp
+)
+
+@Dao
+interface BookDao {
+    @Query("SELECT * FROM books ORDER BY addedTimestamp DESC")
+    fun getAllBooks(): Flow<List<BookEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertBook(book: BookEntity)
+
+    @Update
+    suspend fun updateBook(book: BookEntity)
+
+    @Delete
+    suspend fun deleteBook(book: BookEntity)
 }
 
-fun extractVolumeNumber(title: String): Int {
-    if (title.isBlank()) return 999
-    val patterns = listOf(
-        Regex("""(?i)(?:Tome|T\.|T|Volume|Vol\.|Vol|Book|Saison|#)\s*(\d+)"""),
-        Regex("""(?i)T(\d+)\b"""),
-        Regex("""\b(\d+)\b""")
-    )
-    for (pattern in patterns) {
-        val match = pattern.find(title)
-        if (match != null) {
-            val num = match.groupValues[1].toIntOrNull()
-            if (num != null) return num
+@Database(entities = [BookEntity::class], version = 1, exportSchema = false)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun bookDao(): BookDao
+
+    companion object {
+        @Volatile
+        private var INSTANCE: AppDatabase? = null
+
+        fun getDatabase(context: Context): AppDatabase {
+            return INSTANCE ?: synchronized(this) {
+                val instance = Room.databaseBuilder(
+                    context.applicationContext,
+                    AppDatabase::class.java,
+                    "library_database"
+                ).build()
+                INSTANCE = instance
+                instance
+            }
         }
     }
-    return 999
 }
 
 // ==========================================
-// 5. API DE RECHERCHE
+// 4. SERVICE API (Google Books + OpenLibrary)
 // ==========================================
 object BookApiService {
-    suspend fun searchBook(isbnOrTitle: String): Book? = withContext(Dispatchers.IO) {
-        val cleanQuery = isbnOrTitle.trim()
-        val isIsbn = cleanQuery.replace("-", "").all { it.isDigit() } && cleanQuery.length >= 9
+    suspend fun searchBook(query: String): Book? = withContext(Dispatchers.IO) {
+        val cleanQuery = query.trim().replace("-", "")
+        
+        // 1. Essai Google Books API
+        val googleResult = searchGoogleBooks(cleanQuery)
+        if (googleResult != null) return@withContext googleResult
 
-        if (isIsbn) {
-            val cleanIsbn = cleanQuery.replace("-", "")
-            fetchFromOpenLibrary(cleanIsbn)
-                ?: fetchFromGoogleBooks("isbn:$cleanIsbn")
-                ?: fetchFromBnf(cleanIsbn)
-        } else {
-            fetchFromGoogleBooks(cleanQuery)
+        // 2. Repli sur OpenLibrary API
+        searchOpenLibrary(cleanQuery)
+    }
+
+    private fun searchGoogleBooks(query: String): Book? {
+        return try {
+            val urlString = "https://www.googleapis.com/books/v1/volumes?q=$query"
+            val connection = URL(urlString).openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
+
+            if (connection.responseCode == 200) {
+                val jsonStr = connection.inputStream.bufferedReader().use { it.readText() }
+                val root = JSONObject(jsonStr)
+                if (root.optInt("totalItems", 0) > 0) {
+                    val item = root.getJSONArray("items").getJSONObject(0)
+                    val info = item.getJSONObject("volumeInfo")
+
+                    val title = info.optString("title", "Titre inconnu")
+                    val authors = if (info.has("authors")) {
+                        val arr = info.getJSONArray("authors")
+                        (0 until arr.length()).joinToString(", ") { arr.getString(it) }
+                    } else "Auteur inconnu"
+
+                    val publisher = info.optString("publisher", "")
+                    val publishedDate = info.optString("publishedDate", "")
+                    val description = info.optString("description", "")
+                    val pageCount = info.optInt("pageCount", 0)
+
+                    var cover = ""
+                    if (info.has("imageLinks")) {
+                        val images = info.getJSONObject("imageLinks")
+                        cover = images.optString("thumbnail", "")
+                            .replace("http://", "https://")
+                    }
+
+                    Book(
+                        isbn = query,
+                        title = title,
+                        authors = authors,
+                        coverUrl = cover,
+                        publisher = publisher,
+                        publishedDate = publishedDate,
+                        description = description,
+                        source = "Google Books",
+                        totalPages = pageCount
+                    )
+                } else null
+            } else null
+        } catch (e: Exception) {
+            Log.e("BookApiService", "Google Books Error", e)
+            null
         }
     }
 
-    private fun fetchFromOpenLibrary(isbn: String): Book? {
+    private fun searchOpenLibrary(query: String): Book? {
         return try {
-            val urlStr = "https://openlibrary.org/api/books?bibkeys=ISBN:$isbn&format=json&jscmd=data"
-            val jsonStr = makeHttpRequest(urlStr) ?: return null
-            val rootObj = JSONObject(jsonStr)
-            val bookKey = "ISBN:$isbn"
-            if (!rootObj.has(bookKey)) return null
-            val bookObj = rootObj.getJSONObject(bookKey)
-
-            val title = bookObj.optString("title", "Titre inconnu")
-            val authorsArray = bookObj.optJSONArray("authors")
-            val authorsList = mutableListOf<String>()
-            if (authorsArray != null) {
-                for (i in 0 until authorsArray.length()) {
-                    authorsList.add(authorsArray.getJSONObject(i).optString("name"))
-                }
-            }
-            val authors = if (authorsList.isNotEmpty()) authorsList.joinToString(", ") else "Auteur inconnu"
-            val coverUrl = bookObj.optJSONObject("cover")?.optString("medium", "") ?: ""
-            val publishers = bookObj.optJSONArray("publishers")
-            val publisher = if (publishers != null && publishers.length() > 0) publishers.getJSONObject(0).optString("name") else ""
-            val publishDate = bookObj.optString("publish_date", "")
-            val pages = bookObj.optInt("number_of_pages", 300)
-
-            Book(
-                isbn = isbn,
-                title = title,
-                authors = authors,
-                series = extractSeriesFromTitle(title),
-                coverUrl = coverUrl,
-                publisher = publisher,
-                publishedDate = publishDate,
-                source = "Open Library",
-                totalPages = pages
-            )
-        } catch (e: Exception) { null }
-    }
-
-    private fun fetchFromGoogleBooks(query: String): Book? {
-        return try {
-            val encoded = URLEncoder.encode(query, "UTF-8")
-            val urlStr = "https://www.googleapis.com/books/v1/volumes?q=$encoded&maxResults=1"
-            val jsonStr = makeHttpRequest(urlStr) ?: return null
-            val rootObj = JSONObject(jsonStr)
-            val items = rootObj.optJSONArray("items") ?: return null
-            if (items.length() == 0) return null
-
-            val volumeInfo = items.getJSONObject(0).getJSONObject("volumeInfo")
-            val title = volumeInfo.optString("title", "Titre inconnu")
-
-            val authorsArray = volumeInfo.optJSONArray("authors")
-            val authorsList = mutableListOf<String>()
-            if (authorsArray != null) {
-                for (i in 0 until authorsArray.length()) {
-                    authorsList.add(authorsArray.getString(i))
-                }
-            }
-            val authors = if (authorsList.isNotEmpty()) authorsList.joinToString(", ") else "Auteur inconnu"
-
-            val imageLinks = volumeInfo.optJSONObject("imageLinks")
-            val rawCover = imageLinks?.optString("thumbnail", "") ?: ""
-            val coverUrl = rawCover.replace("http://", "https://")
-
-            val publisher = volumeInfo.optString("publisher", "")
-            val publishedDate = volumeInfo.optString("publishedDate", "")
-            val description = volumeInfo.optString("description", "")
-            val pageCount = volumeInfo.optInt("pageCount", 300)
-
-            val industryIds = volumeInfo.optJSONArray("industryIdentifiers")
-            var isbn = ""
-            if (industryIds != null) {
-                for (i in 0 until industryIds.length()) {
-                    val idObj = industryIds.getJSONObject(i)
-                    if (idObj.optString("type") == "ISBN_13") {
-                        isbn = idObj.optString("identifier")
-                        break
-                    }
-                }
+            val urlString = if (query.all { it.isDigit() }) {
+                "https://openlibrary.org/api/books?bibkeys=ISBN:$query&format=json&jscmd=data"
+            } else {
+                "https://openlibrary.org/search.json?q=${query.replace(" ", "+")}"
             }
 
-            Book(
-                isbn = isbn,
-                title = title,
-                authors = authors,
-                series = extractSeriesFromTitle(title),
-                coverUrl = coverUrl,
-                publisher = publisher,
-                publishedDate = publishedDate,
-                description = description,
-                source = "Google Books",
-                totalPages = pageCount
-            )
-        } catch (e: Exception) { null }
-    }
+            val connection = URL(urlString).openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 5000
+            connection.readTimeout = 5000
 
-    private fun fetchFromBnf(isbn: String): Book? {
-        return try {
-            val urlStr = "https://catalogue.bnf.fr/api/SRU?operation=searchRetrieve&version=1.2&query=bib.isbn%20all%20%22$isbn%22&recordSchema=dublincore"
-            val xmlStr = makeHttpRequest(urlStr) ?: return null
+            if (connection.responseCode == 200) {
+                val jsonStr = connection.inputStream.bufferedReader().use { it.readText() }
+                val root = JSONObject(jsonStr)
 
-            val titleMatch = Regex("""<dc:title>(.*?)</dc:title>""").find(xmlStr)
-            val title = titleMatch?.groupValues?.get(1)?.trim() ?: return null
+                if (query.all { it.isDigit() }) {
+                    val key = "ISBN:$query"
+                    if (root.has(key)) {
+                        val data = root.getJSONObject(key)
+                        val title = data.optString("title", "Titre inconnu")
+                        val authors = if (data.has("authors")) {
+                            val arr = data.getJSONArray("authors")
+                            (0 until arr.length()).joinToString(", ") { arr.getJSONObject(it).getString("name") }
+                        } else "Auteur inconnu"
 
-            val creatorMatches = Regex("""<dc:creator>(.*?)</dc:creator>""").findAll(xmlStr)
-            val authorsList = creatorMatches.map { it.groupValues[1].trim() }.toList()
-            val authors = if (authorsList.isNotEmpty()) authorsList.joinToString(", ") else "Auteur inconnu"
+                        var cover = ""
+                        if (data.has("cover")) {
+                            cover = data.getJSONObject("cover").optString("large", "")
+                        }
 
-            Book(
-                isbn = isbn,
-                title = title,
-                authors = authors,
-                series = extractSeriesFromTitle(title),
-                source = "BnF (France)"
-            )
-        } catch (e: Exception) { null }
-    }
+                        val pages = data.optInt("number_of_pages", 0)
 
-    private fun makeHttpRequest(urlString: String): String? {
-        var conn: HttpURLConnection? = null
-        return try {
-            val url = URL(urlString)
-            conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = 8000
-            conn.readTimeout = 8000
-            conn.requestMethod = "GET"
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android BookManager/2.0)")
-            if (conn.responseCode == 200) {
-                conn.inputStream.bufferedReader().use { it.readText() }
+                        Book(
+                            isbn = query,
+                            title = title,
+                            authors = authors,
+                            coverUrl = cover,
+                            source = "OpenLibrary",
+                            totalPages = pages
+                        )
+                    } else null
+                } else {
+                    val docs = root.optJSONArray("docs")
+                    if (docs != null && docs.length() > 0) {
+                        val doc = docs.getJSONObject(0)
+                        val title = doc.optString("title", "Titre inconnu")
+                        val authors = if (doc.has("author_name")) {
+                            val arr = doc.getJSONArray("author_name")
+                            (0 until arr.length()).joinToString(", ") { arr.getString(it) }
+                        } else "Auteur inconnu"
+
+                        val coverId = doc.optInt("cover_i", 0)
+                        val cover = if (coverId > 0) "https://covers.openlibrary.org/b/id/$coverId-L.jpg" else ""
+
+                        Book(
+                            isbn = query,
+                            title = title,
+                            authors = authors,
+                            coverUrl = cover,
+                            source = "OpenLibrary"
+                        )
+                    } else null
+                }
             } else null
-        } catch (e: Exception) { null } finally {
-            conn?.disconnect()
+        } catch (e: Exception) {
+            Log.e("BookApiService", "OpenLibrary Error", e)
+            null
         }
     }
 }
 
 // ==========================================
-// 6. VIEWMODEL & ÉTATS DE L'APPLICATION
+// 5. VIEWMODEL & ÉTATS UI
 // ==========================================
 sealed class UiState {
     object Idle : UiState()
@@ -373,6 +376,12 @@ class BookViewModel(private val bookDao: BookDao) : ViewModel() {
         }
     }
 
+    fun addBookDirectly(book: Book) {
+        viewModelScope.launch {
+            bookDao.insertBook(book.toEntity())
+        }
+    }
+
     fun updateBook(updatedBook: Book) {
         viewModelScope.launch {
             bookDao.updateBook(updatedBook.toEntity())
@@ -389,7 +398,6 @@ class BookViewModel(private val bookDao: BookDao) : ViewModel() {
         _uiState.value = UiState.Idle
     }
 
-    // GÈRE L'EXPORTATION JSON (Création de la chaîne JSON)
     fun getExportJsonString(): String {
         val jsonArray = JSONArray()
         books.value.forEach { book ->
@@ -418,7 +426,6 @@ class BookViewModel(private val bookDao: BookDao) : ViewModel() {
         return jsonArray.toString(2)
     }
 
-    // GÈRE L'IMPORTATION JSON (Lecture et insertion dans Room)
     fun importFromJsonString(jsonString: String, onComplete: (Int) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -456,7 +463,47 @@ class BookViewModel(private val bookDao: BookDao) : ViewModel() {
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    onComplete(-1) // Signal d'erreur
+                    onComplete(-1)
+                }
+            }
+        }
+    }
+}
+
+class BookViewModelFactory(private val bookDao: BookDao) : ViewModelProvider.Factory {
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(BookViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return BookViewModel(bookDao) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class")
+    }
+}
+
+// ==========================================
+// 6. MAIN ACTIVITY & ENTRY POINT
+// ==========================================
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        val database = AppDatabase.getDatabase(this)
+        val viewModelFactory = BookViewModelFactory(database.bookDao())
+        val viewModel = ViewModelProvider(this, viewModelFactory)[BookViewModel::class.java]
+
+        setContent {
+            MaterialTheme(
+                colorScheme = darkColorScheme(
+                    background = AppTheme.BackgroundDark,
+                    surface = AppTheme.SurfaceDark,
+                    primary = AppTheme.PrimaryEmerald
+                )
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = AppTheme.BackgroundDark
+                ) {
+                    MainScreen(viewModel = viewModel)
                 }
             }
         }
@@ -464,29 +511,8 @@ class BookViewModel(private val bookDao: BookDao) : ViewModel() {
 }
 
 // ==========================================
-// 7. ACTIVITÉ PRINCIPALE
+// 7. INTERFACE GRAPHIQUE COMPOSABLE
 // ==========================================
-class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContent {
-            MaterialTheme(
-                colorScheme = darkColorScheme(
-                    background = AppTheme.BackgroundDark,
-                    surface = AppTheme.SurfaceDark,
-                    primary = AppTheme.PrimaryEmerald,
-                    onPrimary = Color.Black,
-                    onBackground = AppTheme.TextPrimary,
-                    onSurface = AppTheme.TextPrimary
-                )
-            ) {
-                MainScreen()
-            }
-        }
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: BookViewModel) {
@@ -494,7 +520,14 @@ fun MainScreen(viewModel: BookViewModel) {
     val books by viewModel.books.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
 
-    // LAUNCHER POUR EXPORTER LE FICHIER JSON
+    var selectedStatusTab by remember { mutableStateOf<ReadStatus?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
+    var isGridView by remember { mutableStateOf(false) }
+
+    var selectedBookForDetail by remember { mutableStateOf<Book?>(null) }
+    var showManualAddDialog by remember { mutableStateOf(false) }
+    var showCameraScanner by remember { mutableStateOf(false) }
+
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
@@ -510,7 +543,6 @@ fun MainScreen(viewModel: BookViewModel) {
         }
     }
 
-    // LAUNCHER POUR IMPORTER LE FICHIER JSON
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -534,8 +566,41 @@ fun MainScreen(viewModel: BookViewModel) {
         }
     }
 
-    // Rest du code UI (Search, Status Filter, etc.)
-    // ...
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            showCameraScanner = true
+        } else {
+            Toast.makeText(context, "Permission caméra requise pour le scan", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val filteredBooks = remember(books, selectedStatusTab, searchQuery) {
+        books.filter { book ->
+            val matchesStatus = selectedStatusTab == null || book.status == selectedStatusTab
+            val matchesSearch = searchQuery.isBlank() ||
+                    book.title.contains(searchQuery, ignoreCase = true) ||
+                    book.authors.contains(searchQuery, ignoreCase = true) ||
+                    book.series.contains(searchQuery, ignoreCase = true) ||
+                    book.isbn.contains(searchQuery, ignoreCase = true)
+            matchesStatus && matchesSearch
+        }
+    }
+
+    LaunchedEffect(uiState) {
+        when (val state = uiState) {
+            is UiState.Success -> {
+                Toast.makeText(context, "Ajouté : ${state.book.title}", Toast.LENGTH_SHORT).show()
+                viewModel.resetState()
+            }
+            is UiState.Error -> {
+                Toast.makeText(context, state.message, Toast.LENGTH_LONG).show()
+                viewModel.resetState()
+            }
+            else -> {}
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -551,7 +616,7 @@ fun MainScreen(viewModel: BookViewModel) {
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "(${books.size} livres)",
+                                text = "(${books.size})",
                                 fontSize = 14.sp,
                                 color = AppTheme.TextSecondary
                             )
@@ -559,478 +624,322 @@ fun MainScreen(viewModel: BookViewModel) {
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = AppTheme.BackgroundDark),
                     actions = {
-                        // BOUTON IMPORTER
+                        IconButton(onClick = { isGridView = !isGridView }) {
+                            Icon(
+                                imageVector = if (isGridView) Icons.Default.List else Icons.Default.GridView,
+                                contentDescription = "Changer la vue",
+                                tint = AppTheme.TextPrimary
+                            )
+                        }
                         IconButton(onClick = { importLauncher.launch(arrayOf("application/json", "*/*")) }) {
                             Icon(
                                 imageVector = Icons.Outlined.FileUpload,
-                                contentDescription = "Importer",
+                                contentDescription = "Importer JSON",
                                 tint = AppTheme.AccentTeal
                             )
                         }
-                        // BOUTON EXPORTER
                         IconButton(onClick = { exportLauncher.launch("ma_bibliotheque.json") }) {
                             Icon(
                                 imageVector = Icons.Outlined.FileDownload,
-                                contentDescription = "Exporter",
+                                contentDescription = "Exporter JSON",
                                 tint = AppTheme.PrimaryEmerald
                             )
                         }
                     }
                 )
 
-                // TabRow et reste du composable...
-
-    // Filtrage et Tri dynamiques
-    val groupedBooks = remember(books, searchQuery, selectedStatusFilter, activeSortOption, isAscending) {
-        val filtered = books.filter { book ->
-            val matchesQuery = searchQuery.isBlank() ||
-                book.title.contains(searchQuery, ignoreCase = true) ||
-                book.authors.contains(searchQuery, ignoreCase = true) ||
-                book.series.contains(searchQuery, ignoreCase = true) ||
-                book.isbn.contains(searchQuery)
-
-            val matchesStatus = selectedStatusFilter == null || book.status == selectedStatusFilter
-            matchesQuery && matchesStatus
-        }
-
-        val sorted = when (activeSortOption) {
-            SortOption.TITLE -> if (isAscending) filtered.sortedBy { it.title } else filtered.sortedByDescending { it.title }
-            SortOption.AUTHOR -> if (isAscending) filtered.sortedBy { it.authors } else filtered.sortedByDescending { it.authors }
-            SortOption.RATING -> if (isAscending) filtered.sortedBy { it.rating } else filtered.sortedByDescending { it.rating }
-            SortOption.PROGRESS -> if (isAscending) filtered.sortedBy { it.currentPage } else filtered.sortedByDescending { it.currentPage }
-            SortOption.DATE_ADDED -> if (isAscending) filtered.sortedBy { it.addedTimestamp } else filtered.sortedByDescending { it.addedTimestamp }
-        }
-
-        sorted.groupBy { book ->
-            val s = if (book.series.isNotBlank() && book.series != "Hors série") {
-                book.series
-            } else {
-                extractSeriesFromTitle(book.title)
-            }
-            if (s.isBlank()) "Hors série" else s
-        }.mapValues { (_, seriesList) ->
-            seriesList.sortedWith(
-                compareBy<Book> { extractVolumeNumber(it.title) }
-                    .thenBy { it.title }
-            )
-        }.toSortedMap { a, b ->
-            when {
-                a == "Hors série" -> 1
-                b == "Hors série" -> -1
-                else -> a.compareTo(b, ignoreCase = true)
-            }
-        }
-    }
-
-    Scaffold(
-        topBar = {
-            Column(modifier = Modifier.background(AppTheme.BackgroundDark)) {
-                TopAppBar(
-                    title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "Bibliothèque",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 24.sp,
-                                color = AppTheme.TextPrimary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "(${books.size} livres)",
-                                fontSize = 14.sp,
-                                color = AppTheme.TextSecondary
-                            )
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Rechercher titre, auteur, tome...", color = AppTheme.TextTertiary) },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AppTheme.TextSecondary) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Clear, contentDescription = null, tint = AppTheme.TextSecondary)
+                            }
                         }
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = AppTheme.BackgroundDark),
-                    actions = {
-                        IconButton(onClick = { viewModel.exportToJson(context) }) {
-                            Icon(Icons.Outlined.FileDownload, contentDescription = "Exporter", tint = AppTheme.PrimaryEmerald)
-                        }
-                    }
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AppTheme.PrimaryEmerald,
+                        unfocusedBorderColor = AppTheme.CardBorder,
+                        focusedContainerColor = AppTheme.SurfaceDark,
+                        unfocusedContainerColor = AppTheme.SurfaceDark,
+                        focusedTextColor = AppTheme.TextPrimary,
+                        unfocusedTextColor = AppTheme.TextPrimary
+                    )
                 )
 
-                TabRow(
-                    selectedTabIndex = selectedTab,
+                ScrollableTabRow(
+                    selectedTabIndex = if (selectedStatusTab == null) 0 else selectedStatusTab!!.ordinal + 1,
+                    edgePadding = 16.dp,
                     containerColor = AppTheme.BackgroundDark,
                     contentColor = AppTheme.PrimaryEmerald,
                     divider = {}
                 ) {
-                    tabs.forEachIndexed { index, title ->
+                    Tab(
+                        selected = selectedStatusTab == null,
+                        onClick = { selectedStatusTab = null },
+                        text = { Text("Tous (${books.size})", fontSize = 13.sp) }
+                    )
+                    ReadStatus.values().forEach { status ->
+                        val count = books.count { it.status == status }
                         Tab(
-                            selected = selectedTab == index,
-                            onClick = { selectedTab = index },
-                            text = {
-                                Text(
-                                    text = title,
-                                    fontSize = 14.sp,
-                                    fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (selectedTab == index) AppTheme.PrimaryEmerald else AppTheme.TextSecondary
-                                )
-                            }
+                            selected = selectedStatusTab == status,
+                            onClick = { selectedStatusTab = status },
+                            text = { Text("${status.label} ($count)", fontSize = 13.sp) }
                         )
                     }
                 }
             }
         },
-        bottomBar = {
-            NavigationBar(
-                containerColor = AppTheme.SurfaceDark,
-                tonalElevation = 8.dp
-            ) {
-                NavigationBarItem(
-                    selected = selectedNavIndex == 0,
-                    onClick = { selectedNavIndex = 0 },
-                    icon = { Icon(Icons.Default.MenuBook, contentDescription = "Bibliothèque") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = AppTheme.PrimaryEmerald,
-                        indicatorColor = AppTheme.CardBackground
-                    )
-                )
-                NavigationBarItem(
-                    selected = selectedNavIndex == 1,
-                    onClick = { selectedNavIndex = 1 },
-                    icon = { Icon(Icons.Default.Explore, contentDescription = "Découvrir") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = AppTheme.PrimaryEmerald,
-                        indicatorColor = AppTheme.CardBackground
-                    )
-                )
-                NavigationBarItem(
-                    selected = false,
-                    onClick = { showAddBottomSheet = true },
-                    icon = {
-                        Box(
-                            modifier = Modifier
-                                .size(42.dp)
-                                .clip(CircleShape)
-                                .background(AppTheme.PrimaryEmerald),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = "Ajouter", tint = Color.Black)
+        floatingActionButton = {
+            Column(horizontalAlignment = Alignment.End) {
+                SmallFloatingActionButton(
+                    onClick = { showManualAddDialog = true },
+                    containerColor = AppTheme.SurfaceDark,
+                    contentColor = AppTheme.AccentPurple,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    Icon(Icons.Default.Edit, contentDescription = "Ajout manuel")
+                }
+                FloatingActionButton(
+                    onClick = {
+                        val hasPermission = ContextCompat.checkSelfPermission(
+                            context, Manifest.permission.CAMERA
+                        ) == PackageManager.PERMISSION_GRANTED
+
+                        if (hasPermission) {
+                            showCameraScanner = true
+                        } else {
+                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                         }
-                    }
-                )
-                NavigationBarItem(
-                    selected = selectedNavIndex == 2,
-                    onClick = { selectedNavIndex = 2 },
-                    icon = { Icon(Icons.Default.People, contentDescription = "Communauté") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = AppTheme.PrimaryEmerald,
-                        indicatorColor = AppTheme.CardBackground
-                    )
-                )
-                NavigationBarItem(
-                    selected = selectedNavIndex == 3,
-                    onClick = { selectedNavIndex = 3 },
-                    icon = { Icon(Icons.Default.MoreHoriz, contentDescription = "Menu") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = AppTheme.PrimaryEmerald,
-                        indicatorColor = AppTheme.CardBackground
-                    )
-                )
+                    },
+                    containerColor = AppTheme.PrimaryEmerald,
+                    contentColor = Color.White
+                ) {
+                    Icon(Icons.Default.QrCodeScanner, contentDescription = "Scanner un code-barres")
+                }
             }
-        },
-        containerColor = AppTheme.BackgroundDark
-    ) { paddingValues ->
-        Column(
+        }
+    ) { innerPadding ->
+
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
-                .padding(horizontal = 12.dp)
+                .padding(innerPadding)
         ) {
-            AnimatedVisibility(visible = uiState !is UiState.Idle) {
-                when (uiState) {
-                    is UiState.Loading -> {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(6.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            CircularProgressIndicator(color = AppTheme.PrimaryEmerald, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Recherche en cours...", color = AppTheme.TextSecondary, fontSize = 13.sp)
-                        }
-                    }
-                    is UiState.Error -> {
-                        val msg = (uiState as UiState.Error).message
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = AppTheme.AccentRose.copy(alpha = 0.2f)),
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                        ) {
-                            Text(msg, color = AppTheme.TextPrimary, fontSize = 12.sp, modifier = Modifier.padding(8.dp))
-                        }
-                    }
-                    is UiState.Success -> {
-                        LaunchedEffect(Unit) {
-                            kotlinx.coroutines.delay(2000)
-                            viewModel.resetState()
-                        }
-                        Text("✔ Livre ajouté !", color = AppTheme.PrimaryEmerald, modifier = Modifier.padding(4.dp), fontSize = 12.sp)
-                    }
-                    else -> {}
-                }
-            }
-
-            // Barre de Recherche & Filtres Activés
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = AppTheme.TextSecondary, modifier = Modifier.size(18.dp)) },
-                    placeholder = { Text("Recherche...", color = AppTheme.TextTertiary, fontSize = 13.sp) },
-                    modifier = Modifier.weight(1f).height(46.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = AppTheme.PrimaryEmerald,
-                        unfocusedBorderColor = AppTheme.CardBorder,
-                        focusedTextColor = AppTheme.TextPrimary
-                    ),
-                    singleLine = true
+            if (uiState is UiState.Loading) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = AppTheme.PrimaryEmerald
                 )
-
-                Surface(
-                    color = if (selectedStatusFilter != null) AppTheme.PrimaryEmerald.copy(alpha = 0.15f) else AppTheme.SurfaceDark,
-                    shape = RoundedCornerShape(8.dp),
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp,
-                        if (selectedStatusFilter != null) AppTheme.PrimaryEmerald else AppTheme.CardBorder
-                    ),
-                    modifier = Modifier
-                        .height(46.dp)
-                        .clickable { showFilterSheet = true }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.FilterList,
-                            contentDescription = null,
-                            tint = if (selectedStatusFilter != null) AppTheme.PrimaryEmerald else AppTheme.TextSecondary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "Filtre",
-                            color = if (selectedStatusFilter != null) AppTheme.PrimaryEmerald else AppTheme.TextSecondary,
-                            fontSize = 13.sp
-                        )
-                    }
-                }
             }
 
-            // Grille de Livres (3 colonnes)
-            if (groupedBooks.isEmpty()) {
+            if (filteredBooks.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Outlined.AutoStories, contentDescription = null, modifier = Modifier.size(56.dp), tint = AppTheme.TextTertiary)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Aucun livre ne correspond aux critères", color = AppTheme.TextSecondary, fontSize = 14.sp)
+                    Text(
+                        text = if (searchQuery.isNotBlank()) "Aucun livre trouvé" else "Aucun livre dans cette catégorie",
+                        color = AppTheme.TextTertiary,
+                        fontSize = 16.sp
+                    )
+                }
+            } else if (isGridView) {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    contentPadding = PaddingValues(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(filteredBooks, key = { it.id }) { book ->
+                        BookGridItem(book = book, onClick = { selectedBookForDetail = book })
                     }
                 }
             } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                    contentPadding = PaddingValues(bottom = 16.dp, top = 4.dp)
+                LazyColumn(
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxSize()
                 ) {
-                    groupedBooks.forEach { (seriesName, seriesBooks) ->
-                        item(span = { GridItemSpan(3) }) {
-                            SeriesGridHeader(seriesName = seriesName, count = seriesBooks.size)
-                        }
-
-                        items(seriesBooks, key = { it.id }) { book ->
-                            BookGridItem(
-                                book = book,
-                                onClick = { selectedBookForDetail = book }
-                            )
-                        }
+                    items(filteredBooks, key = { it.id }) { book ->
+                        BookListItem(book = book, onClick = { selectedBookForDetail = book })
                     }
                 }
             }
         }
     }
 
-    // Modal Bottom Sheet des Filtres & Tris
-    if (showFilterSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showFilterSheet = false },
-            containerColor = AppTheme.SurfaceDark
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                Text("Filtrer par statut", fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary, fontSize = 16.sp)
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilterChip(
-                        selected = selectedStatusFilter == null,
-                        onClick = { selectedStatusFilter = null },
-                        label = { Text("Tous") }
-                    )
-                    ReadStatus.values().forEach { status ->
-                        FilterChip(
-                            selected = selectedStatusFilter == status,
-                            onClick = { selectedStatusFilter = status },
-                            label = { Text(status.label) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = AppTheme.PrimaryEmerald,
-                                selectedLabelColor = Color.Black
-                            )
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-                Divider(color = AppTheme.CardBorder)
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Trier par", fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary, fontSize = 16.sp)
-                    IconButton(onClick = { isAscending = !isAscending }) {
-                        Icon(
-                            imageVector = if (isAscending) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
-                            contentDescription = "Ordre",
-                            tint = AppTheme.PrimaryEmerald
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                SortOption.values().forEach { option ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { activeSortOption = option }
-                            .padding(vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(option.label, color = if (activeSortOption == option) AppTheme.PrimaryEmerald else AppTheme.TextPrimary)
-                        if (activeSortOption == option) {
-                            Icon(Icons.Default.Check, contentDescription = null, tint = AppTheme.PrimaryEmerald)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-        }
-    }
-
-    // Bottom Sheet de Fiche Détaillée
-    if (selectedBookForDetail != null) {
-        BookDetailSheet(
-            book = selectedBookForDetail!!,
-            onDismiss = { selectedBookForDetail = null },
-            onUpdate = { updated ->
-                viewModel.updateBook(updated)
-                selectedBookForDetail = updated
-            },
-            onDelete = {
-                viewModel.removeBook(selectedBookForDetail!!)
-                selectedBookForDetail = null
+    if (showCameraScanner) {
+        BarcodeScannerDialog(
+            onDismiss = { showCameraScanner = false },
+            onBarcodeScanned = { isbn ->
+                showCameraScanner = false
+                viewModel.searchAndAddBook(isbn)
             }
         )
     }
 
-    // Modal Bottom Sheet (Menu d'Ajout)
-    if (showAddBottomSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showAddBottomSheet = false },
-            containerColor = AppTheme.SurfaceDark,
-            scrimColor = Color.Black.copy(alpha = 0.6f)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 24.dp, top = 8.dp)
-            ) {
-                AddOptionItem(
-                    icon = Icons.Default.QrCodeScanner,
-                    title = "Scanner le livre ISBN",
-                    onClick = {
-                        showAddBottomSheet = false
-                        isBatchMode = false
-                        val permissionCheck = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
-                        if (permissionCheck == PackageManager.PERMISSION_GRANTED) showScanner = true
-                        else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                    }
-                )
-                AddOptionItem(
-                    icon = Icons.Default.DocumentScanner,
-                    title = "Scanner plusieurs livres",
-                    onClick = {
-                        showAddBottomSheet = false
-                        isBatchMode = true
-                        val permissionCheck = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
-                        if (permissionCheck == PackageManager.PERMISSION_GRANTED) showScanner = true
-                        else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                    }
-                )
-                AddOptionItem(
-                    icon = Icons.Default.Search,
-                    title = "Rechercher de nouveaux livres",
-                    onClick = { showAddBottomSheet = false }
-                )
-                AddOptionItem(
-                    icon = Icons.Default.Edit,
-                    title = "Ajouter un nouveau livre manuellement",
-                    onClick = { showAddBottomSheet = false }
-                )
-                AddOptionItem(
-                    icon = Icons.Default.EmojiEvents,
-                    title = "Ajouter un nouvel objectif de lecture",
-                    onClick = { showAddBottomSheet = false }
-                )
+    if (showManualAddDialog) {
+        ManualAddBookDialog(
+            onDismiss = { showManualAddDialog = false },
+            onAdd = { newBook ->
+                viewModel.addBookDirectly(newBook)
+                showManualAddDialog = false
             }
-        }
+        )
     }
 
-    // Modal Scanner Caméra
-    if (showScanner) {
-        Dialog(onDismissRequest = { showScanner = false }) {
-            Card(
+    selectedBookForDetail?.let { book ->
+        BookDetailDialog(
+            book = book,
+            onDismiss = { selectedBookForDetail = null },
+            onUpdate = { updatedBook ->
+                viewModel.updateBook(updatedBook)
+                selectedBookForDetail = updatedBook
+            },
+            onDelete = {
+                viewModel.removeBook(book)
+                selectedBookForDetail = null
+            }
+        )
+    }
+}
+
+// ==========================================
+// 8. ÉLÉMENTS DE LISTE ET DE GRILLE
+// ==========================================
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun BookListItem(book: Book, onClick: () -> Unit) {
+    val statusColor = when (book.status) {
+        ReadStatus.READ -> AppTheme.PrimaryEmerald
+        ReadStatus.READING -> AppTheme.AccentAmber
+        ReadStatus.UNREAD -> AppTheme.AccentPurple
+        ReadStatus.WISHLIST -> AppTheme.AccentTeal
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onClick() },
+        colors = CardDefaults.cardColors(containerColor = AppTheme.CardBackground)
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(10.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(380.dp),
-                shape = RoundedCornerShape(16.dp)
+                    .size(width = 50.dp, height = 75.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(AppTheme.SurfaceDark)
             ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    CameraBarcodeScanner(
-                        onBarcodeScanned = { barcode ->
-                            if (!isBatchMode) showScanner = false
-                            viewModel.searchAndAddBook(barcode)
-                            Toast.makeText(context, "Scan : $barcode", Toast.LENGTH_SHORT).show()
-                        }
+                if (book.coverUrl.isNotBlank()) {
+                    AsyncImage(
+                        model = book.coverUrl,
+                        contentDescription = book.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
                     )
-                    IconButton(
-                        onClick = { showScanner = false },
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(8.dp)
-                    ) {
-                        Icon(Icons.Default.Close, contentDescription = "Fermer", tint = Color.White)
+                } else {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Default.MenuBook,
+                            contentDescription = null,
+                            tint = AppTheme.TextTertiary,
+                            modifier = Modifier.size(24.dp)
+                        )
                     }
+                }
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = book.title,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = AppTheme.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Text(
+                    text = book.authors,
+                    fontSize = 13.sp,
+                    color = AppTheme.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                if (book.series.isNotBlank()) {
+                    Text(
+                        text = book.series,
+                        fontSize = 12.sp,
+                        color = AppTheme.AccentPurple,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .background(statusColor.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = book.status.label,
+                            color = statusColor,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    if (book.isBorrowed) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .background(AppTheme.AccentRose.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = "Prêté: ${book.borrowerName}",
+                                color = AppTheme.AccentRose,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (book.rating > 0) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Star,
+                        contentDescription = null,
+                        tint = AppTheme.AccentAmber,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "${book.rating}",
+                        fontSize = 12.sp,
+                        color = AppTheme.TextSecondary,
+                        modifier = Modifier.padding(start = 2.dp)
+                    )
                 }
             }
         }
@@ -1038,364 +947,309 @@ fun MainScreen(viewModel: BookViewModel) {
 }
 
 // ==========================================
-// 8. COMPOSANTS DE FICHE & AUTRES
+// 9. DIALOGS (DÉTAILS, SCANNER, AJOUT MANUEL)
 // ==========================================
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BookDetailSheet(
+fun BookDetailDialog(
     book: Book,
     onDismiss: () -> Unit,
     onUpdate: (Book) -> Unit,
     onDelete: () -> Unit
 ) {
-    var detailTab by remember { mutableIntStateOf(0) }
-    val volumeNum = remember(book.title) { extractVolumeNumber(book.title) }
+    var currentPage by remember { mutableStateOf(book.currentPage.toString()) }
+    var totalPages by remember { mutableStateOf(book.totalPages.toString()) }
+    var notes by remember { mutableStateOf(book.personalNotes) }
+    var rating by remember { mutableStateOf(book.rating) }
+    var status by remember { mutableStateOf(book.status) }
+    var isBorrowed by remember { mutableStateOf(book.isBorrowed) }
+    var borrowerName by remember { mutableStateOf(book.borrowerName) }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = AppTheme.BackgroundDark,
-        scrimColor = Color.Black.copy(alpha = 0.7f),
-        modifier = Modifier.fillMaxHeight(0.92f)
-    ) {
-        Column(
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp)
-                .verticalScroll(rememberScrollState())
+                .fillMaxWidth()
+                .padding(16.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = AppTheme.SurfaceDark)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            Column(
+                modifier = Modifier
+                    .padding(16.dp)
+                    .verticalScroll(rememberScrollState())
             ) {
-                Box(
-                    modifier = Modifier
-                        .width(110.dp)
-                        .height(160.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(AppTheme.CardBackground)
-                        .border(1.dp, AppTheme.CardBorder, RoundedCornerShape(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
+                    Text(
+                        text = "Détails du Livre",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        color = AppTheme.TextPrimary
+                    )
+                    IconButton(onClick = onDelete) {
+                        Icon(Icons.Default.Delete, contentDescription = "Supprimer", tint = AppTheme.AccentRose)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row {
                     if (book.coverUrl.isNotBlank()) {
                         AsyncImage(
                             model = book.coverUrl,
                             contentDescription = book.title,
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .size(width = 80.dp, height = 120.dp)
+                                .clip(RoundedCornerShape(8.dp)),
                             contentScale = ContentScale.Crop
                         )
-                    } else {
-                        Icon(
-                            Icons.Default.MenuBook,
-                            contentDescription = null,
-                            tint = AppTheme.TextTertiary,
-                            modifier = Modifier.size(40.dp).align(Alignment.Center)
-                        )
+                        Spacer(modifier = Modifier.width(12.dp))
                     }
-
-                    if (volumeNum != 999) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .background(AppTheme.AccentPurple, RoundedCornerShape(topEnd = 6.dp))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text("$volumeNum", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Column {
+                        Text(text = book.title, fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary)
+                        Text(text = book.authors, fontSize = 14.sp, color = AppTheme.TextSecondary)
+                        if (book.isbn.isNotBlank()) {
+                            Text(text = "ISBN: ${book.isbn}", fontSize = 12.sp, color = AppTheme.TextTertiary)
                         }
                     }
                 }
 
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = book.title,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = AppTheme.TextPrimary
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = book.authors,
-                        fontSize = 14.sp,
-                        color = AppTheme.TextSecondary
-                    )
+                Spacer(modifier = Modifier.height(16.dp))
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                Text("Statut de lecture", fontSize = 14.sp, color = AppTheme.TextSecondary)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    ReadStatus.values().forEach { st ->
+                        FilterChip(
+                            selected = status == st,
+                            onClick = { status = st },
+                            label = { Text(st.label, fontSize = 11.sp) }
+                        )
+                    }
+                }
 
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        repeat(5) { index ->
-                            val isStarFilled = index < book.rating.toInt()
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = currentPage,
+                        onValueChange = { currentPage = it },
+                        label = { Text("Page actuelle") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = totalPages,
+                        onValueChange = { totalPages = it },
+                        label = { Text("Total pages") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text("Note (${rating}/5)", fontSize = 14.sp, color = AppTheme.TextSecondary)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    (1..5).forEach { star ->
+                        IconButton(onClick = { rating = star.toFloat() }) {
                             Icon(
-                                imageVector = if (isStarFilled) Icons.Default.Star else Icons.Outlined.StarBorder,
+                                imageVector = if (star <= rating) Icons.Default.Star else Icons.Outlined.Star,
                                 contentDescription = null,
-                                tint = if (isStarFilled) AppTheme.AccentAmber else AppTheme.TextTertiary,
-                                modifier = Modifier
-                                    .size(20.dp)
-                                    .clickable { onUpdate(book.copy(rating = (index + 1).toFloat())) }
+                                tint = if (star <= rating) AppTheme.AccentAmber else AppTheme.TextTertiary
                             )
-                        }
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (book.rating > 0) "${book.rating}" else "Noter",
-                            fontSize = 12.sp,
-                            color = AppTheme.TextSecondary
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Surface(
-                        color = AppTheme.SurfaceDark,
-                        shape = RoundedCornerShape(6.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, AppTheme.CardBorder)
-                    ) {
-                        Text(
-                            text = book.series.ifBlank { "Hors série" },
-                            fontSize = 11.sp,
-                            color = AppTheme.AccentTeal,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            TabRow(
-                selectedTabIndex = detailTab,
-                containerColor = AppTheme.SurfaceDark,
-                contentColor = AppTheme.PrimaryEmerald,
-                modifier = Modifier.clip(RoundedCornerShape(8.dp))
-            ) {
-                Tab(
-                    selected = detailTab == 0,
-                    onClick = { detailTab = 0 },
-                    text = { Text("Notes & Suivi", fontSize = 13.sp) }
-                )
-                Tab(
-                    selected = detailTab == 1,
-                    onClick = { detailTab = 1 },
-                    text = { Text("Informations", fontSize = 13.sp) }
-                )
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            if (detailTab == 0) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = AppTheme.SurfaceDark),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Progression", fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary)
-                            Text(
-                                "${book.currentPage} / ${book.totalPages} pages",
-                                fontSize = 13.sp,
-                                color = AppTheme.PrimaryEmerald,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Slider(
-                            value = book.currentPage.toFloat(),
-                            onValueChange = { newPage ->
-                                val newStatus = when {
-                                    newPage.toInt() == 0 -> ReadStatus.UNREAD
-                                    newPage.toInt() >= book.totalPages -> ReadStatus.READ
-                                    else -> ReadStatus.READING
-                                }
-                                onUpdate(book.copy(currentPage = newPage.toInt(), status = newStatus))
-                            },
-                            valueRange = 0f..book.totalPages.toFloat().coerceAtLeast(1f),
-                            colors = SliderDefaults.colors(
-                                thumbColor = AppTheme.PrimaryEmerald,
-                                activeTrackColor = AppTheme.PrimaryEmerald,
-                                inactiveTrackColor = AppTheme.CardBorder
-                            )
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            ReadStatus.values().forEach { status ->
-                                FilterChip(
-                                    selected = book.status == status,
-                                    onClick = {
-                                        val page = if (status == ReadStatus.READ) book.totalPages else book.currentPage
-                                        onUpdate(book.copy(status = status, currentPage = page))
-                                    },
-                                    label = { Text(status.label, fontSize = 11.sp) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = AppTheme.PrimaryEmerald,
-                                        selectedLabelColor = Color.Black
-                                    )
-                                )
-                            }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = isBorrowed,
+                        onCheckedChange = { isBorrowed = it }
+                    )
+                    Text("Livre prêté", color = AppTheme.TextPrimary)
+                }
+
+                if (isBorrowed) {
+                    OutlinedTextField(
+                        value = borrowerName,
+                        onValueChange = { borrowerName = it },
+                        label = { Text("Nom de l'emprunteur") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
 
                 OutlinedTextField(
-                    value = book.personalNotes,
-                    onValueChange = { onUpdate(book.copy(personalNotes = it)) },
-                    placeholder = { Text("Ajouter des remarques ou des citations...", color = AppTheme.TextTertiary, fontSize = 13.sp) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(110.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = AppTheme.PrimaryEmerald,
-                        unfocusedBorderColor = AppTheme.CardBorder,
-                        focusedTextColor = AppTheme.TextPrimary
-                    )
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = { Text("Notes personnelles") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 3
                 )
-            } else {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = AppTheme.SurfaceDark),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Annuler", color = AppTheme.TextSecondary)
+                    }
+                    Button(
+                        onClick = {
+                            val updated = book.copy(
+                                currentPage = currentPage.toIntOrNull() ?: 0,
+                                totalPages = totalPages.toIntOrNull() ?: 0,
+                                personalNotes = notes,
+                                rating = rating,
+                                status = status,
+                                isBorrowed = isBorrowed,
+                                borrowerName = if (isBorrowed) borrowerName else ""
+                            )
+                            onUpdate(updated)
+                            onDismiss()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = AppTheme.PrimaryEmerald)
                     ) {
-                        InfoRow(label = "ISBN", value = book.isbn.ifBlank { "N/A" })
-                        InfoRow(label = "Éditeur", value = book.publisher.ifBlank { "Inconnu" })
-                        InfoRow(label = "Publication", value = book.publishedDate.ifBlank { "Inconnue" })
-                        InfoRow(label = "Source", value = book.source)
-                        InfoRow(label = "Total Pages", value = "${book.totalPages}")
-                        InfoRow(
-                            label = "Statut Prêt",
-                            value = if (book.isBorrowed) "Prêté à ${book.borrowerName}" else "Non prêté"
-                        )
+                        Text("Enregistrer")
                     }
                 }
-
-                if (book.description.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("Résumé", fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary, fontSize = 14.sp)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(book.description, fontSize = 12.sp, color = AppTheme.TextSecondary, textAlign = TextAlign.Justify)
-                }
             }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            OutlinedButton(
-                onClick = onDelete,
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = AppTheme.AccentRose),
-                border = androidx.compose.foundation.BorderStroke(1.dp, AppTheme.AccentRose),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Supprimer ce livre")
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }
 
 @Composable
-fun InfoRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(label, color = AppTheme.TextTertiary, fontSize = 13.sp)
-        Text(value, color = AppTheme.TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-    }
-}
+fun ManualAddBookDialog(onDismiss: () -> Unit, onAdd: (Book) -> Unit) {
+    var title by remember { mutableStateOf("") }
+    var author by remember { mutableStateOf("") }
+    var series by remember { mutableStateOf("") }
+    var pages by remember { mutableStateOf("") }
 
-@Composable
-fun AddOptionItem(
-    icon: ImageVector,
-    title: String,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-            .padding(horizontal = 20.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = AppTheme.TextSecondary,
-            modifier = Modifier.size(24.dp)
-        )
-        Spacer(modifier = Modifier.width(16.dp))
-        Text(
-            text = title,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Medium,
-            color = AppTheme.TextPrimary
-        )
-    }
-}
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.padding(16.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = AppTheme.SurfaceDark)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Ajouter un livre manuellement", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = AppTheme.TextPrimary)
+                Spacer(modifier = Modifier.height(12.dp))
 
-@Composable
-fun CameraBarcodeScanner(onBarcodeScanned: (String) -> Unit) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var lastScannedTime by remember { mutableLongStateOf(0L) }
+                OutlinedTextField(value = title, onValueChange = { title = it }, label = { Text("Titre *") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = author, onValueChange = { author = it }, label = { Text("Auteur *") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = series, onValueChange = { series = it }, label = { Text("Série / Tome") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = pages, onValueChange = { pages = it }, label = { Text("Nombre de pages") }, modifier = Modifier.fillMaxWidth())
 
-    AndroidView(
-        factory = { ctx ->
-            val previewView = PreviewView(ctx)
-            val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+                Spacer(modifier = Modifier.height(16.dp))
 
-            cameraProviderFuture.addListener({
-                val cameraProvider = cameraProviderFuture.get()
-                val preview = Preview.Builder().build().also {
-                    it.setSurfaceProvider(previewView.surfaceProvider)
-                }
-
-                val barcodeScanner = BarcodeScanning.getClient()
-                val imageAnalysis = ImageAnalysis.Builder()
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .build()
-
-                imageAnalysis.setAnalyzer(Executors.newSingleThreadExecutor()) { imageProxy ->
-                    processImageProxy(barcodeScanner, imageProxy) { barcode ->
-                        val now = System.currentTimeMillis()
-                        if (now - lastScannedTime > 2000) {
-                            lastScannedTime = now
-                            onBarcodeScanned(barcode)
-                        }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("Annuler", color = AppTheme.TextSecondary) }
+                    Button(
+                        onClick = {
+                            if (title.isNotBlank() && author.isNotBlank()) {
+                                onAdd(
+                                    Book(
+                                        title = title,
+                                        authors = author,
+                                        series = series,
+                                        totalPages = pages.toIntOrNull() ?: 0,
+                                        source = "Manuel"
+                                    )
+                                )
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = AppTheme.PrimaryEmerald)
+                    ) {
+                        Text("Ajouter")
                     }
                 }
+            }
+        }
+    }
+}
 
-                val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-                try {
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview, imageAnalysis)
-                } catch (e: Exception) {
-                    e.printStackTrace()
+@Composable
+fun BarcodeScannerDialog(onDismiss: () -> Unit, onBarcodeScanned: (String) -> Unit) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(400.dp),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                AndroidView(
+                    factory = { ctx ->
+                        val previewView = PreviewView(ctx)
+                        val executor = Executors.newSingleThreadExecutor()
+                        val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+
+                        cameraProviderFuture.addListener({
+                            val cameraProvider = cameraProviderFuture.get()
+                            val preview = Preview.Builder().build().also {
+                                it.setSurfaceProvider(previewView.surfaceProvider)
+                            }
+
+                            val scanner = BarcodeScanning.getClient(
+                                BarcodeScannerOptions.Builder()
+                                    .setBarcodeFormats(Barcode.FORMAT_EAN_13, Barcode.FORMAT_EAN_8)
+                                    .build()
+                            )
+
+                            val imageAnalysis = ImageAnalysis.Builder()
+                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                                .build()
+
+                            imageAnalysis.setAnalyzer(executor) { imageProxy ->
+                                processImageProxy(scanner, imageProxy, onBarcodeScanned)
+                            }
+
+                            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+
+                            try {
+                                cameraProvider.unbindAll()
+                                cameraProvider.bindToLifecycle(
+                                    lifecycleOwner,
+                                    cameraSelector,
+                                    preview,
+                                    imageAnalysis
+                                )
+                            } catch (e: Exception) {
+                                Log.e("Scanner", "Erreur binding caméra", e)
+                            }
+                        }, ContextCompat.getMainExecutor(ctx))
+
+                        previewView
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = "Fermer", tint = Color.White)
                 }
-            }, ContextCompat.getMainExecutor(ctx))
-
-            previewView
-        },
-        modifier = Modifier.fillMaxSize()
-    )
+            }
+        }
+    }
 }
 
 @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
 private fun processImageProxy(
     scanner: com.google.mlkit.vision.barcode.BarcodeScanner,
     imageProxy: ImageProxy,
-    onSuccess: (String) -> Unit
+    onBarcodeScanned: (String) -> Unit
 ) {
     val mediaImage = imageProxy.image
     if (mediaImage != null) {
@@ -1403,10 +1257,8 @@ private fun processImageProxy(
         scanner.process(image)
             .addOnSuccessListener { barcodes ->
                 for (barcode in barcodes) {
-                    val rawValue = barcode.rawValue
-                    if (rawValue != null && (barcode.format == Barcode.FORMAT_EAN_13 || barcode.format == Barcode.FORMAT_EAN_8)) {
-                        onSuccess(rawValue)
-                        break
+                    barcode.rawValue?.let { value ->
+                        onBarcodeScanned(value)
                     }
                 }
             }
@@ -1418,38 +1270,9 @@ private fun processImageProxy(
     }
 }
 
-@Composable
-fun SeriesGridHeader(seriesName: String, count: Int) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 12.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(if (seriesName == "Hors série") AppTheme.TextTertiary else AppTheme.PrimaryEmerald)
-        )
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(
-            text = seriesName,
-            fontWeight = FontWeight.Bold,
-            fontSize = 16.sp,
-            color = AppTheme.TextPrimary,
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            text = "$count vol.",
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = AppTheme.AccentTeal
-        )
-    }
-}
-
-// Fonction utilitaire pour extraire le numéro de tome depuis le titre
+// ==========================================
+// 10. UTILS & GRID ITEM
+// ==========================================
 fun extractVolumeNumber(title: String): Int {
     val regex = Regex("""(?i)(?:tome|t|vol|volume|\bT|\bV)\s*[:.-]?\s*(\d+)""")
     val match = regex.find(title)
