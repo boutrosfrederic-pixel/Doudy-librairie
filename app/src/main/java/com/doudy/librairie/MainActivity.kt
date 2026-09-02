@@ -1311,8 +1311,8 @@ class BookViewModel(
 
                     errors++
 
-                    return@for
-                }
+               continue
+}
 
                 val book =
                     Book(
