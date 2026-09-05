@@ -4062,35 +4062,30 @@ fun ManualAddBookDialog(
 @Composable
 fun BarcodeScannerDialog(
     onDismiss: () -> Unit,
-    onBarcodeScanned = { isbn ->
-
-    showScanner = false
-
-    viewModel.searchAndAddBook(isbn)
-}
+    onBarcodeScanned: (String) -> Unit
+) {
 
     val lifecycleOwner =
         LocalLifecycleOwner.current
 
+    var hasScanned by remember {
+        mutableStateOf(false)
+    }
+
     Dialog(
-        onDismissRequest =
-            onDismiss
+        onDismissRequest = onDismiss
     ) {
 
         Card(
             Modifier
                 .fillMaxWidth()
                 .height(400.dp),
-            shape =
-                RoundedCornerShape(16.dp)
+            shape = RoundedCornerShape(16.dp)
         ) {
 
             Box(
                 Modifier.fillMaxSize()
             ) {
-                      var hasScanned by remember {
-    mutableStateOf(false)
-}
 
                 AndroidView(
 
@@ -4100,93 +4095,88 @@ fun BarcodeScannerDialog(
                             PreviewView(ctx)
 
                         val executor =
-                            Executors
-                                .newSingleThreadExecutor()
+                            Executors.newSingleThreadExecutor()
 
                         val providerFuture =
                             ProcessCameraProvider
                                 .getInstance(ctx)
 
-                        providerFuture
-                            .addListener({
+                        providerFuture.addListener({
 
-                                val provider =
-                                    providerFuture.get()
+                            val provider =
+                                providerFuture.get()
 
-                                val preview =
-                                    Preview.Builder()
+                            val preview =
+                                Preview.Builder()
+                                    .build()
+
+                            preview.setSurfaceProvider(
+                                previewView.surfaceProvider
+                            )
+
+                            val scanner =
+                                BarcodeScanning.getClient(
+                                    BarcodeScannerOptions
+                                        .Builder()
+                                        .setBarcodeFormats(
+                                            Barcode.FORMAT_EAN_13,
+                                            Barcode.FORMAT_EAN_8
+                                        )
                                         .build()
-
-                                preview.setSurfaceProvider(
-                                    previewView
-                                        .surfaceProvider
                                 )
 
-                                val scanner =
-                                    BarcodeScanning
-                                        .getClient(
-                                            BarcodeScannerOptions
-                                                .Builder()
-                                                .setBarcodeFormats(
-                                                    Barcode.FORMAT_EAN_13,
-                                                    Barcode.FORMAT_EAN_8
-                                                )
-                                                .build()
-                                        )
-
-                                val analysis =
-                                    ImageAnalysis
-                                        .Builder()
-                                        .setBackpressureStrategy(
-                                            ImageAnalysis
-                                                .STRATEGY_KEEP_ONLY_LATEST
-                                        )
-                                        .build()
-
-                                analysis.setAnalyzer(
-    executor
-) { imageProxy ->
-
-    processImageProxy(
-        scanner,
-        imageProxy
-    ) { isbn ->
-
-        if (!hasScanned) {
-
-            hasScanned = true
-
-            onBarcodeScanned(isbn)
-        }
-    }
-}
-
-
-                                try {
-
-                                    provider
-                                        .unbindAll()
-
-                                    provider
-                                        .bindToLifecycle(
-                                            lifecycleOwner,
-                                            CameraSelector
-                                                .DEFAULT_BACK_CAMERA,
-                                            preview,
-                                            analysis
-                                        )
-
-                                } catch (e: Exception) {
-
-                                    Log.e(
-                                        "Scanner",
-                                        "Erreur caméra",
-                                        e
+                            val analysis =
+                                ImageAnalysis.Builder()
+                                    .setBackpressureStrategy(
+                                        ImageAnalysis
+                                            .STRATEGY_KEEP_ONLY_LATEST
                                     )
-                                }
+                                    .build()
 
-                            }, ContextCompat
-                                .getMainExecutor(ctx))
+                            analysis.setAnalyzer(
+                                executor
+                            ) { imageProxy ->
+
+                                processImageProxy(
+                                    scanner,
+                                    imageProxy
+                                ) { isbn ->
+
+                                    if (!hasScanned) {
+
+                                        hasScanned = true
+
+                                        onBarcodeScanned(
+                                            isbn
+                                        )
+                                    }
+                                }
+                            }
+
+                            try {
+
+                                provider.unbindAll()
+
+                                provider.bindToLifecycle(
+                                    lifecycleOwner,
+                                    CameraSelector
+                                        .DEFAULT_BACK_CAMERA,
+                                    preview,
+                                    analysis
+                                )
+
+                            } catch (e: Exception) {
+
+                                Log.e(
+                                    "Scanner",
+                                    "Erreur caméra",
+                                    e
+                                )
+                            }
+
+                        },
+                            ContextCompat.getMainExecutor(ctx)
+                        )
 
                         previewView
                     },
@@ -4196,8 +4186,7 @@ fun BarcodeScannerDialog(
                 )
 
                 IconButton(
-                    onClick =
-                        onDismiss,
+                    onClick = onDismiss,
                     modifier =
                         Modifier
                             .align(
@@ -4208,7 +4197,7 @@ fun BarcodeScannerDialog(
 
                     Icon(
                         Icons.Default.Close,
-                        "Fermer",
+                        contentDescription = "Fermer",
                         tint = Color.White
                     )
                 }
@@ -4216,6 +4205,7 @@ fun BarcodeScannerDialog(
         }
     }
 }
+
 
 
 // ============================================================
