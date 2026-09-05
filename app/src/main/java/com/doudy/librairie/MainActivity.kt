@@ -327,10 +327,14 @@ object BookApiService {
         return try {
 
             val encodedQuery =
-                URLEncoder.encode(query, "UTF-8")
+    URLEncoder.encode(query, "UTF-8")
 
-            val urlString =
-                "https://www.googleapis.com/books/v1/volumes?q=$encodedQuery"
+val urlString =
+    if (query.all { it.isDigit() }) {
+        "https://www.googleapis.com/books/v1/volumes?q=isbn:$encodedQuery"
+    } else {
+        "https://www.googleapis.com/books/v1/volumes?q=$encodedQuery"
+    }
 
             val connection =
                 URL(urlString).openConnection() as HttpURLConnection
