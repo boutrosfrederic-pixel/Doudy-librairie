@@ -690,6 +690,24 @@ class BookViewModel(
 
         viewModelScope.launch {
 
+            val cleanIsbn = isbnOrQuery
+    .trim()
+    .replace("-", "")
+
+val existing =
+    bookDao.findByIsbn(cleanIsbn)
+
+if (existing != null) {
+
+    _uiState.value =
+        UiState.Error(
+            "Livre déjà présent"
+        )
+
+    return@launch
+}
+
+
             _uiState.value =
                 UiState.Loading
 
@@ -4044,8 +4062,12 @@ fun ManualAddBookDialog(
 @Composable
 fun BarcodeScannerDialog(
     onDismiss: () -> Unit,
-    onBarcodeScanned: (String) -> Unit
-) {
+    onBarcodeScanned = { isbn ->
+
+    showScanner = false
+
+    viewModel.searchAndAddBook(isbn)
+}
 
     val lifecycleOwner =
         LocalLifecycleOwner.current
@@ -4066,6 +4088,9 @@ fun BarcodeScannerDialog(
             Box(
                 Modifier.fillMaxSize()
             ) {
+                      var hasScanned by remember {
+    mutableStateOf(false)
+}
 
                 AndroidView(
 
@@ -4119,15 +4144,23 @@ fun BarcodeScannerDialog(
                                         .build()
 
                                 analysis.setAnalyzer(
-                                    executor
-                                ) { imageProxy ->
+    executor
+) { imageProxy ->
 
-                                    processImageProxy(
-                                        scanner,
-                                        imageProxy,
-                                        onBarcodeScanned
-                                    )
-                                }
+    processImageProxy(
+        scanner,
+        imageProxy
+    ) { isbn ->
+
+        if (!hasScanned) {
+
+            hasScanned = true
+
+            onBarcodeScanned(isbn)
+        }
+    }
+}
+
 
                                 try {
 
