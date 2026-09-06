@@ -303,22 +303,18 @@ abstract class AppDatabase : RoomDatabase() {
 // ============================================================
 // 4. API GOOGLE BOOKS / OPENLIBRARY
 // ============================================================
+private fun normalizeIsbn(input: String): String {
+    return input
+        .uppercase(Locale.ROOT)
+        .replace("ISBN", "")
+        .replace("-", "")
+        .replace(" ", "")
+        .trim()
+}
 
-object BookApiService {
+private fun isIsbn(value: String): Boolean {
 
-    private fun normalizeIsbn(input: String): String {
-        return input
-            .uppercase(Locale.ROOT)
-            .replace("ISBN", "")
-            .replace("-", "")
-            .replace(" ", "")
-            .trim()
-    }
-
-    private fun isIsbn(value: String): Boolean {
-
-    val isbn =
-        normalizeIsbn(value)
+    val isbn = normalizeIsbn(value)
 
     return isbn.matches(
         Regex("^[0-9X]{10}$")
@@ -327,65 +323,80 @@ object BookApiService {
     )
 }
 
+private fun isbn13To10(
+    isbn13: String
+): String? {
+
+    val clean = normalizeIsbn(isbn13)
+
+    if (
+        clean.length != 13 ||
+        !clean.startsWith("978")
+    ) {
         return null
-        }
-
-        val body = clean.substring(3, 12)
-
-        var sum = 0
-
-        body.forEachIndexed { index, char ->
-            sum += char.digitToInt() * (10 - index)
-        }
-
-        val check = 11 - (sum % 11)
-
-        val control = when (check) {
-            10 -> "X"
-            11 -> "0"
-            else -> check.toString()
-        }
-
-        return body + control
     }
 
-    suspend fun searchBook(query: String): Book? =
-        withContext(Dispatchers.IO) {
+    val body = clean.substring(3, 12)
 
-            val cleanQuery = normalizeIsbn(query)
+    var sum = 0
 
-            if (cleanQuery.isBlank()) {
-                return@withContext null
+    body.forEachIndexed { index, char ->
+        sum += char.digitToInt() * (10 - index)
+    }
+
+    val check = 11 - (sum % 11)
+
+    val control = when (check) {
+        10 -> "X"
+        11 -> "0"
+        else -> check.toString()
+    }
+
+    return body + control
+}
+
+suspend fun searchBook(
+    query: String
+): Book? =
+    withContext(Dispatchers.IO) {
+
+        val cleanQuery = normalizeIsbn(query)
+
+        if (cleanQuery.isBlank()) {
+            return@withContext null
+        }
+
+        val attempts = buildList {
+            add(cleanQuery)
+
+            isbn13To10(cleanQuery)?.let {
+                add(it)
+            }
+        }.distinct()
+
+        for (candidate in attempts) {
+
+            searchGoogleBooks(candidate)?.let {
+                return@withContext it.copy(
+                    isbn = normalizeIsbn(it.isbn)
+                )
             }
 
-            val attempts = buildList {
-                add(cleanQuery)
-
-                isbn13To10(cleanQuery)?.let {
-                    add(it)
-                }
-            }.distinct()
-
-            for (candidate in attempts) {
-
-                searchGoogleBooks(candidate)?.let {
-                    return@withContext it.copy(
-                        isbn = normalizeIsbn(it.isbn)
-                    )
-                }
-
-                searchOpenLibrary(candidate)?.let {
-                    return@withContext it.copy(
-                        isbn = normalizeIsbn(it.isbn)
-                    )
-                }
-
-                searchBnf(candidate)?.let {
-                    return@withContext it.copy(
-                        isbn = normalizeIsbn(it.isbn)
-                    )
-                }
+            searchOpenLibrary(candidate)?.let {
+                return@withContext it.copy(
+                    isbn = normalizeIsbn(it.isbn)
+                )
             }
+
+            searchBnf(candidate)?.let {
+                return@withContext it.copy(
+                    isbn = normalizeIsbn(it.isbn)
+                )
+            }
+        }
+
+        null
+    }
 
             null
         }
@@ -401,13 +412,12 @@ object BookApiService {
                     cleanQuery,
                     StandardCharsets.UTF_8.toString()
                 )
-
             val urlString =
-                if (isIsbn(cleanQuery)) {
-                    "https://www.googleapis.com/books/v1/volumes?q=isbn:$encodedQuery"
-                } else {
-                    "https://www.googleapis.com/books/v1/volumes?q=$encodedQuery"
-                }
+    if (isIsbn(cleanQuery)) {
+        "<a href=..."
+    } else {
+        "<a href=..."
+    }
 
             val connection =
                 URL(urlString)
@@ -575,10 +585,10 @@ object BookApiService {
             val urlString =
                 if (isbnQuery) {
 
-                    "https://openlibrary.org/api/books" +
-                            "?bibkeys=ISBN:$cleanQuery" +
-                            "&format=json" +
-                            "&jscmd=data"
+                   "https://openlibrary.org/api/books" +
+    "?bibkeys=ISBN:$cleanQuery" +
+    "&format=json" +
+    "&jscmd=data"
 
                 } else {
 
@@ -717,7 +727,7 @@ object BookApiService {
 
                     val cover =
                         if (coverId > 0) {
-                            "https://covers.openlibrary.org/b/id/$coverId-L.jpg"
+                       "https://covers.openlibrary.org/b/id/$coverId-L.jpg"
                         } else {
                             ""
                         }
@@ -801,7 +811,7 @@ object BookApiService {
             ) ?: return ""
 
         return if (
-            publishers.length() > 0
+       publishers.length() > 0
         ) {
             publishers
                 .optJSONObject(0)
@@ -821,7 +831,7 @@ object BookApiService {
 
         if (
             isbn13 != null &&
-            isbn13.length() > 0
+           isbn13.length() > 0
         ) {
             return normalizeIsbn(
                 isbn13.optString(0)
@@ -847,7 +857,7 @@ object BookApiService {
                 )
 
             val urlString =
-                "https://catalogue.bnf.fr/rechercher.do?motRecherche=$encoded"
+    "https://catalogue.bnf.fr/rechercher.do?motRecherche=$encoded"
 
             val connection =
                 URL(urlString)
