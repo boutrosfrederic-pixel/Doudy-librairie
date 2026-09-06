@@ -1027,25 +1027,22 @@ class BookViewModel(
     // --------------------------------------------------------
 
     fun searchAndAddBook(
-        isbnOrQuery: String
-    ) {
-
-        if (isbnOrQuery.isBlank()) return
-
-        viewModelScope.launch {
-
-           fun searchAndAddBook(
     isbnOrQuery: String
 ) {
+    ...
+}
 
-    if (isbnOrQuery.isBlank()) {
-        return
-    }
+fun addBookDirectly(
+    book: Book
+) {
+    ...
+}
 
-    viewModelScope.launch {
-
-        _uiState.value =
-            UiState.Loading
+fun updateBook(
+    book: Book
+) {
+    ...
+}
 
         try {
 
