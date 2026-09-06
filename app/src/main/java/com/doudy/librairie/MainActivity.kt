@@ -306,21 +306,212 @@ abstract class AppDatabase : RoomDatabase() {
 
 object BookApiService {
 
-    suspend fun searchBook(query: String): Book? =
-        withContext(Dispatchers.IO) {
+    object BookApiService {
 
-            val cleanQuery = query
-                .trim()
-                .replace("-", "")
+    private fun normalizeIsbn(input: String): String {
 
-            val googleResult = searchGoogleBooks(cleanQuery)
+        return input
+            .uppercase(Locale.ROOT)
+            .replace("ISBN", "")
+            .replace("-", "")
+            .replace(" ", "")
+            .trim()
+    }
 
-            if (googleResult != null) {
-                return@withContext googleResult
+    private fun isIsbn(value: String): Boolean {
+
+        val isbn = normalizeIsbn(value)
+
+        return isbn.matches(
+            Regex("^[0-9X]{10,13}$")
+        )
+    }
+
+    // ============================
+    // ÉTAPE 2 ICI
+    // ============================
+
+    private fun isbn13To10(
+        isbn13: String
+    ): String? {
+
+        val clean = normalizeIsbn(isbn13)
+
+        if (
+            clean.length != 13 ||
+            !clean.startsWith("978")
+        ) {
+            return null
+        }
+
+        val body =
+            clean.substring(3, 12)
+
+        var sum = 0
+
+        body.forEachIndexed { index, c ->
+
+            sum +=
+                c.digitToInt() *
+                (10 - index)
+        }
+
+        val check =
+            11 - (sum % 11)
+
+        val control =
+            when (check) {
+
+                10 -> "X"
+
+                11 -> "0"
+
+                else -> check.toString()
             }
 
-            searchOpenLibrary(cleanQuery)
+        return body + control
+    }
+
+    suspend fun searchBook(
+    query: String
+): Book? =
+    withContext(Dispatchers.IO) {
+
+        val cleanQuery =
+            normalizeIsbn(query)
+
+        val attempts =
+            mutableListOf<String>()
+
+        attempts.add(cleanQuery)
+
+        isbn13To10(cleanQuery)
+            ?.let {
+                attempts.add(it)
+            }
+
+        for (candidate in attempts) {
+
+            searchGoogleBooks(candidate)
+                ?.let {
+                    return@withContext it
+                }
+
+            searchOpenLibrary(candidate)
+                ?.let {
+                    return@withContext it
+                }
+
+            searchBnf(candidate)
+                ?.let {
+                    return@withContext it
+                }
         }
+
+        null
+    }
+    
+   private fun normalizeIsbn(
+    input: String
+): String {
+
+    return input
+        .uppercase(Locale.ROOT)
+        .replace("ISBN", "")
+        .replace("-", "")
+        .replace(" ", "")
+        .trim()
+}
+
+private fun isIsbn(
+    value: String
+): Boolean {
+
+    val isbn =
+        normalizeIsbn(value)
+
+    return isbn.matches(
+        Regex("^[0-9X]{10,13}$")
+    )
+}
+
+private fun isbn13To10(
+    isbn13: String
+): String? {
+
+    val clean =
+        normalizeIsbn(isbn13)
+
+    if (
+        clean.length != 13 ||
+        !clean.startsWith("978")
+    ) {
+        return null
+    }
+
+    val body =
+        clean.substring(3, 12)
+
+    var sum = 0
+
+    body.forEachIndexed { index, c ->
+
+        sum +=
+            c.digitToInt() *
+            (10 - index)
+    }
+
+    val check =
+        11 - (sum % 11)
+
+    val control =
+        when (check) {
+
+            10 -> "X"
+
+            11 -> "0"
+
+            else -> check.toString()
+        }
+
+    return body + control
+}
+private fun isIsbn(value: String): Boolean {
+
+    val isbn = normalizeIsbn(value)
+
+    return isbn.matches(
+        Regex("^[0-9X]{10,13}$")
+    )
+}
+    
+    suspend fun searchBook(query: String): Book? =
+        val clean =
+    normalizeIsbn(query)
+
+val attempts =
+    mutableListOf<String>()
+
+attempts.add(clean)
+
+isbn13To10(clean)?.let {
+    attempts.add(it)
+}
+
+for (candidate in attempts) {
+
+    searchGoogleBooks(candidate)
+        ?.let {
+            return@withContext it
+        }
+
+    searchOpenLibrary(candidate)
+        ?.let {
+            return@withContext it
+        }
+}
+
+null
 
     private fun searchGoogleBooks(query: String): Book? {
 
@@ -330,7 +521,7 @@ object BookApiService {
     URLEncoder.encode(query, "UTF-8")
 
 val urlString =
-    if (query.all { it.isDigit() }) {
+    if (isIsbn(query)) {
         "https://www.googleapis.com/books/v1/volumes?q=isbn:$encodedQuery"
     } else {
         "https://www.googleapis.com/books/v1/volumes?q=$encodedQuery"
@@ -414,13 +605,70 @@ val urlString =
             null
         }
     }
+private fun searchBnf(
+    isbn: String
+): Book? {
 
+    return try {
+
+        val urlString =
+            "https://catalogue.bnf.fr/rechercher.do?motRecherche=$isbn"
+
+        val connection =
+            URL(urlString)
+                .openConnection()
+                    as HttpURLConnection
+
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 5000
+        connection.readTimeout = 5000
+
+        if (
+            connection.responseCode != 200
+        ) {
+            return null
+        }
+
+        val html =
+            connection.inputStream
+                .bufferedReader()
+                .use {
+                    it.readText()
+                }
+
+        if (
+            !html.contains(
+                isbn,
+                ignoreCase = true
+            )
+        ) {
+            return null
+        }
+
+        Book(
+            isbn = isbn,
+            title = "Livre trouvé via la BnF",
+            authors = "Auteur inconnu",
+            source = "BnF"
+        )
+
+    } catch (e: Exception) {
+
+        Log.e(
+            "BookApiService",
+            "BnF Error",
+            e
+        )
+
+        null
+    }
+}
     private fun searchOpenLibrary(query: String): Book? {
 
         return try {
 
             val urlString = if (
-                query.all { it.isDigit() }
+                isIsbn(query)
             ) {
 
                 "https://openlibrary.org/api/books" +
@@ -454,7 +702,7 @@ val urlString =
 
             val root = JSONObject(jsonStr)
 
-            if (query.all { it.isDigit() }) {
+            if isIsbn(query) {
 
                 val key = "ISBN:$query"
 
