@@ -398,9 +398,6 @@ suspend fun searchBook(
         null
     }
 
-            null
-        }
-
     private fun searchGoogleBooks(query: String): Book? {
 
         return try {
@@ -2058,15 +2055,6 @@ fun addBookDirectly(book: Book) {
     }
 
     private suspend fun saveImportedBook(
-        book: Book
-    ): ImportAction {
-
-        return try {
-
-            val existingById =
-                bookDao.findById(book.id)
-
-            private suspend fun saveImportedBook(
     book: Book
 ): ImportAction {
 
@@ -2077,7 +2065,6 @@ fun addBookDirectly(book: Book) {
                 isbn = cleanIsbn(book.isbn)
             )
 
-        // Même ID = doublon
         val existingById =
             bookDao.findById(
                 normalizedBook.id
@@ -2087,7 +2074,6 @@ fun addBookDirectly(book: Book) {
             return ImportAction.DUPLICATE
         }
 
-        // Même ISBN = doublon
         if (
             normalizedBook.isbn.isNotBlank()
         ) {
@@ -2109,6 +2095,17 @@ fun addBookDirectly(book: Book) {
         ImportAction.INSERTED
 
     } catch (e: Exception) {
+
+        Log.e(
+            "IMPORT",
+            "Erreur sauvegarde",
+            e
+        )
+
+        ImportAction.ERROR
+    }
+}
+       catch (e: Exception) {
 
         Log.e(
             "IMPORT",
