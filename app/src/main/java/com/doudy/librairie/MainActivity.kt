@@ -2105,7 +2105,7 @@ fun addBookDirectly(book: Book) {
         ImportAction.ERROR
     }
 }
-       catch (e: Exception) {
+}  catch (e: Exception) {
 
         Log.e(
             "IMPORT",
