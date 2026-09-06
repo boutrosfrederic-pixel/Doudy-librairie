@@ -2054,7 +2054,7 @@ fun addBookDirectly(book: Book) {
         ERROR
     }
 
-    private suspend fun saveImportedBook(
+  private suspend fun saveImportedBook(
     book: Book
 ): ImportAction {
 
@@ -2074,9 +2074,7 @@ fun addBookDirectly(book: Book) {
             return ImportAction.DUPLICATE
         }
 
-        if (
-            normalizedBook.isbn.isNotBlank()
-        ) {
+        if (normalizedBook.isbn.isNotBlank()) {
 
             val existingByIsbn =
                 bookDao.findByIsbn(
@@ -2105,50 +2103,6 @@ fun addBookDirectly(book: Book) {
         ImportAction.ERROR
     }
 }
-}  catch (e: Exception) {
-
-        Log.e(
-            "IMPORT",
-            "Erreur sauvegarde",
-            e
-        )
-
-        ImportAction.ERROR
-    }
-}
-
-                return ImportAction.INSERTED
-            }
-
-            if (book.isbn.isNotBlank()) {
-
-                val existingByIsbn =
-                    bookDao.findByIsbn(book.isbn)
-
-                if (existingByIsbn != null) {
-
-                    return ImportAction.DUPLICATE
-                }
-            }
-
-            bookDao.insertBook(
-                book.toEntity()
-            )
-
-            ImportAction.INSERTED
-
-        } catch (e: Exception) {
-
-            Log.e(
-                "IMPORT",
-                "Erreur sauvegarde",
-                e
-            )
-
-            ImportAction.ERROR
-        }
-    }
-
 
     // ========================================================
     // OUTILS JSON
