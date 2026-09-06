@@ -838,78 +838,77 @@ suspend fun searchBook(
         return ""
     }
 
-    private fun searchBnf(
-        isbn: String
-    ): Book? {
+ private fun searchBnf(
+    isbn: String
+): Book? {
 
-        return try {
+    return try {
 
-            val cleanIsbn =
-                normalizeIsbn(isbn)
+        val cleanIsbn =
+            normalizeIsbn(isbn)
 
-            val encoded =
-                URLEncoder.encode(
-                    cleanIsbn,
-                    StandardCharsets.UTF_8.toString()
-                )
-
-            val urlString =
-    "https://catalogue.bnf.fr/rechercher.do?motRecherche=$encoded"
-
-            val connection =
-                URL(urlString)
-                    .openConnection() as HttpURLConnection
-
-            connection.requestMethod = "GET"
-            connection.connectTimeout = 5000
-            connection.readTimeout = 5000
-
-            try {
-
-                if (
-                    connection.responseCode !=
-                    HttpURLConnection.HTTP_OK
-                ) {
-                    return null
-                }
-
-                val html =
-                    connection.inputStream
-                        .bufferedReader()
-                        .use {
-                            it.readText()
-                        }
-
-                if (
-                    !html.contains(
-                        cleanIsbn,
-                        ignoreCase = true
-                    )
-                ) {
-                    return null
-                }
-
-                Book(
-                    isbn = cleanIsbn,
-                    title = "Livre trouvé via la BnF",
-                    authors = "Auteur inconnu",
-                    source = "BnF"
-                )
-
-            } finally {
-                connection.disconnect()
-            }
-
-        } catch (e: Exception) {
-
-            Log.e(
-                "BookApiService",
-                "BnF Error",
-                e
+        val encoded =
+            URLEncoder.encode(
+                cleanIsbn,
+                StandardCharsets.UTF_8.toString()
             )
 
-            null
+        val urlString =
+            "https://catalogue.bnf.fr/rechercher.do?motRecherche=$encoded"
+
+        val connection =
+            URL(urlString)
+                .openConnection() as HttpURLConnection
+
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 5000
+        connection.readTimeout = 5000
+
+        try {
+
+            if (
+                connection.responseCode !=
+                HttpURLConnection.HTTP_OK
+            ) {
+                return null
+            }
+
+            val html =
+                connection.inputStream
+                    .bufferedReader()
+                    .use {
+                        it.readText()
+                    }
+
+            if (
+                !html.contains(
+                    cleanIsbn,
+                    ignoreCase = true
+                )
+            ) {
+                return null
+            }
+
+            Book(
+                isbn = cleanIsbn,
+                title = "Livre trouvé via la BnF",
+                authors = "Auteur inconnu",
+                source = "BnF"
+            )
+
+        } finally {
+            connection.disconnect()
         }
+
+    } catch (e: Exception) {
+
+        Log.e(
+            "BookApiService",
+            "BnF Error",
+            e
+        )
+
+        null
     }
 }
 // ============================================================
