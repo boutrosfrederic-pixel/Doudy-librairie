@@ -86,8 +86,11 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.io.StringReader
 import java.text.Normalizer
 import java.util.Locale
+import javax.xml.parsers.DocumentBuilderFactory
+import org.xml.sax.InputSource
 import java.util.UUID
 import java.util.concurrent.Executors
 
@@ -307,21 +310,49 @@ abstract class AppDatabase : RoomDatabase() {
 private fun cleanIsbn(input: String): String {
     return input
         .uppercase(Locale.ROOT)
-        .replace("ISBN", "")
-        .replace("-", "")
-        .replace(" ", "")
+        .replace(Regex("ISBN(?:-1[03])?"), "")
+        .filter { it.isDigit() || it == 'X' }
         .trim()
 }
 
 private fun isIsbn(value: String): Boolean {
     val isbn = cleanIsbn(value)
-    return isbn.matches(Regex("^[0-9]{9}[0-9X]$")) ||
-            isbn.matches(Regex("^[0-9]{13}$"))
+    return isValidIsbn10(isbn) || isValidIsbn13(isbn)
+}
+
+private fun isValidIsbn10(isbn: String): Boolean {
+    if (!isbn.matches(Regex("^[0-9]{9}[0-9X]$"))) return false
+
+    val sum =
+        isbn.mapIndexed { index, char ->
+            val value =
+                if (char == 'X') {
+                    10
+                } else {
+                    char.digitToInt()
+                }
+            value * (10 - index)
+        }.sum()
+
+    return sum % 11 == 0
+}
+
+private fun isValidIsbn13(isbn: String): Boolean {
+    if (!isbn.matches(Regex("^[0-9]{13}$"))) return false
+    if (!isbn.startsWith("978") && !isbn.startsWith("979")) return false
+
+    val sum =
+        isbn.mapIndexed { index, char ->
+            val digit = char.digitToInt()
+            if (index % 2 == 0) digit else digit * 3
+        }.sum()
+
+    return sum % 10 == 0
 }
 
 private fun isbn13To10(isbn13: String): String? {
     val clean = cleanIsbn(isbn13)
-    if (clean.length != 13 || !clean.startsWith("978")) return null
+    if (!isValidIsbn13(clean) || !clean.startsWith("978")) return null
 
     val body = clean.substring(3, 12)
     var sum = 0
@@ -340,7 +371,7 @@ private fun isbn13To10(isbn13: String): String? {
 
 private fun isbn10To13(isbn10: String): String? {
     val clean = cleanIsbn(isbn10)
-    if (clean.length != 10 || !clean.matches(Regex("^[0-9]{9}[0-9X]$"))) return null
+    if (!isValidIsbn10(clean)) return null
 
     val body = "978" + clean.substring(0, 9)
     var sum = 0
@@ -364,6 +395,9 @@ private fun isbnVariants(isbn: String): List<String> {
 }
 
 object BookApiService {
+
+    private const val USER_AGENT =
+        "DoudyLibrairie/1.0 (personal-library-app)"
 
     suspend fun searchBook(query: String): Book? = withContext(Dispatchers.IO) {
         val rawQuery = query.trim()
@@ -398,8 +432,8 @@ object BookApiService {
             connection.requestMethod = "GET"
             connection.connectTimeout = 8000
             connection.readTimeout = 8000
-            connection.setRequestProperty("Accept", "application/json")
-            connection.setRequestProperty("User-Agent", "DoudyLibrairie/1.0")
+            connection.setRequestProperty("Accept", "application/json, application/xml, text/xml, */*")
+            connection.setRequestProperty("User-Agent", USER_AGENT)
 
             try {
                 if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
@@ -416,11 +450,21 @@ object BookApiService {
     private fun searchGoogleBooks(query: String): Book? {
         return try {
             val clean = cleanIsbn(query)
-            val encoded = URLEncoder.encode(query.trim(), StandardCharsets.UTF_8.toString())
+            val encoded =
+                URLEncoder.encode(
+                    if (isIsbn(clean)) clean else query.trim(),
+                    StandardCharsets.UTF_8.toString()
+                )
+            val key =
+                BuildConfig.GOOGLE_BOOKS_API_KEY
+                    .takeIf { it.isNotBlank() }
+                    ?.let {
+                        "&key=${URLEncoder.encode(it, StandardCharsets.UTF_8.toString())}"
+                    }.orEmpty()
             val urlString = if (isIsbn(clean)) {
-                "https://www.googleapis.com/books/v1/volumes?q=isbn:$encoded&maxResults=10"
+                "https://www.googleapis.com/books/v1/volumes?q=isbn:$encoded&maxResults=10$key"
             } else {
-                "https://www.googleapis.com/books/v1/volumes?q=$encoded&maxResults=10"
+                "https://www.googleapis.com/books/v1/volumes?q=$encoded&maxResults=10$key"
             }
 
             val jsonStr = openGet(urlString) ?: return null
@@ -502,9 +546,9 @@ object BookApiService {
             val root = JSONObject(jsonStr)
 
             if (isIsbnQuery) {
-                val data = root.optJSONObject("ISBN:$clean") ?: return null
+                val data = root.optJSONObject("ISBN:$clean") ?: return searchOpenLibrarySearch(clean)
                 val title = data.optString("title", "").trim()
-                if (title.isBlank()) return null
+                if (title.isBlank()) return searchOpenLibrarySearch(clean)
 
                 Book(
                     isbn = clean,
@@ -554,6 +598,54 @@ object BookApiService {
         }
     }
 
+    private fun searchOpenLibrarySearch(isbn: String): Book? {
+        return try {
+            val clean = cleanIsbn(isbn)
+            if (!isIsbn(clean)) return null
+
+            val encoded = URLEncoder.encode(clean, StandardCharsets.UTF_8.toString())
+            val urlString = "https://openlibrary.org/search.json?isbn=$encoded&limit=1"
+            val jsonStr = openGet(urlString) ?: return null
+            val root = JSONObject(jsonStr)
+            val docs = root.optJSONArray("docs") ?: return null
+            val doc = docs.optJSONObject(0) ?: return null
+            val title = doc.optString("title", "").trim()
+            if (title.isBlank()) return null
+
+            val authors = doc.optJSONArray("author_name")?.let { array ->
+                (0 until array.length())
+                    .map { array.optString(it).trim() }
+                    .filter { it.isNotBlank() }
+                    .joinToString(", ")
+            }.orEmpty().ifBlank { "Auteur inconnu" }
+
+            val coverId = doc.optInt("cover_i", 0)
+            val cover = if (coverId > 0) {
+                "https://covers.openlibrary.org/b/id/$coverId-L.jpg"
+            } else {
+                "https://covers.openlibrary.org/b/isbn/$clean-L.jpg"
+            }
+
+            Book(
+                isbn = extractOpenLibraryIsbn(doc).ifBlank { clean },
+                title = title,
+                authors = authors,
+                coverUrl = cover,
+                publisher = firstOpenLibraryArrayValue(doc, "publisher"),
+                publishedDate = doc.optString("first_publish_year", ""),
+                source = "OpenLibrary"
+            )
+        } catch (e: Exception) {
+            Log.e("BookApiService", "OpenLibrary Search Error", e)
+            null
+        }
+    }
+
+    private fun firstOpenLibraryArrayValue(doc: JSONObject, key: String): String {
+        val array = doc.optJSONArray(key) ?: return ""
+        return array.optString(0, "")
+    }
+
     private fun extractOpenLibraryAuthors(data: JSONObject): String {
         val authors = data.optJSONArray("authors") ?: return "Auteur inconnu"
         return (0 until authors.length())
@@ -581,33 +673,77 @@ object BookApiService {
     private fun searchBnf(isbn: String): Book? {
         return try {
             val clean = cleanIsbn(isbn)
-            val encoded = URLEncoder.encode(clean, StandardCharsets.UTF_8.toString())
-            val url = "https://catalogue.bnf.fr/rechercher.do?motRecherche=$encoded"
+            if (!isIsbn(clean)) return null
 
-            val connection = URL(url).openConnection() as HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.connectTimeout = 8000
-            connection.readTimeout = 8000
-            connection.setRequestProperty("User-Agent", "DoudyLibrairie/1.0")
-
-            try {
-                if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
-                val html = connection.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
-                if (!html.contains(clean, ignoreCase = true)) return null
-
-                Book(
-                    isbn = clean,
-                    title = "Livre trouvé via la BnF",
-                    authors = "Auteur inconnu",
-                    source = "BnF"
+            val query =
+                URLEncoder.encode(
+                    "(bib.isbn all \"$clean\") or (bib.fuzzyISBN all \"$clean\")",
+                    StandardCharsets.UTF_8.toString()
                 )
-            } finally {
-                connection.disconnect()
-            }
+            val url =
+                "https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve" +
+                        "&query=$query&recordSchema=dublincore&maximumRecords=1"
+            val xml = openGet(url) ?: return null
+
+            parseBnfBook(clean, xml)
         } catch (e: Exception) {
             Log.e("BookApiService", "BnF Error", e)
             null
         }
+    }
+
+    private fun parseBnfBook(isbn: String, xml: String): Book? {
+        return try {
+            val factory =
+                DocumentBuilderFactory.newInstance().apply {
+                    isNamespaceAware = false
+                }
+            val document =
+                factory
+                    .newDocumentBuilder()
+                    .parse(InputSource(StringReader(xml)))
+            document.documentElement.normalize()
+
+            val title =
+                xmlFirstText(document, "dc:title", "title")
+                    .trim()
+            if (title.isBlank()) return null
+
+            Book(
+                isbn = isbn,
+                title = title,
+                authors =
+                    xmlAllText(document, "dc:creator", "creator")
+                        .ifEmpty { listOf("Auteur inconnu") }
+                        .joinToString(", "),
+                publisher = xmlFirstText(document, "dc:publisher", "publisher"),
+                publishedDate = xmlFirstText(document, "dc:date", "date"),
+                description = xmlFirstText(document, "dc:description", "description"),
+                source = "BnF"
+            )
+        } catch (e: Exception) {
+            Log.e("BookApiService", "BnF Parse Error", e)
+            null
+        }
+    }
+
+    private fun xmlFirstText(
+        document: org.w3c.dom.Document,
+        vararg tagNames: String
+    ): String {
+        return xmlAllText(document, *tagNames).firstOrNull().orEmpty()
+    }
+
+    private fun xmlAllText(
+        document: org.w3c.dom.Document,
+        vararg tagNames: String
+    ): List<String> {
+        return tagNames.flatMap { tagName ->
+            val nodes = document.getElementsByTagName(tagName)
+            (0 until nodes.length)
+                .mapNotNull { nodes.item(it)?.textContent?.trim() }
+                .filter { it.isNotBlank() }
+        }.distinct()
     }
 }
 
@@ -623,6 +759,11 @@ sealed class UiState {
 
     data class Success(
         val book: Book
+    ) : UiState()
+
+    data class NotFound(
+        val query: String,
+        val isbn: String
     ) : UiState()
 
     data class Error(
@@ -744,7 +885,13 @@ fun searchAndAddBook(isbnOrQuery: String) {
 
                 val foundBook = BookApiService.searchBook(query)
                 if (foundBook == null) {
-                    _uiState.value = UiState.Error("Aucun livre trouvé pour : $query")
+                    _uiState.value = UiState.NotFound(
+                        query = query,
+                        isbn =
+                            cleaned.takeIf {
+                                isIsbn(it)
+                            }.orEmpty()
+                    )
                     return@launch
                 }
 
@@ -780,28 +927,25 @@ fun searchAndAddBook(isbnOrQuery: String) {
         try {
 
             val normalizedIsbn =
-                book.isbn
-                    .trim()
-                    .uppercase(Locale.ROOT)
-                    .replace("ISBN", "")
-                    .replace("-", "")
-                    .replace(" ", "")
+                cleanIsbn(book.isbn)
 
             if (normalizedIsbn.isNotBlank()) {
 
-                val existing =
-                    bookDao.findByIsbn(
-                        normalizedIsbn
-                    )
-
-                if (existing != null) {
-
-                    _uiState.value =
-                        UiState.Error(
-                            "Livre déjà présent : ${existing.title}"
+                for (variant in isbnVariants(normalizedIsbn)) {
+                    val existing =
+                        bookDao.findByIsbn(
+                            variant
                         )
 
-                    return@launch
+                    if (existing != null) {
+
+                        _uiState.value =
+                            UiState.Error(
+                                "Livre déjà présent : ${existing.title}"
+                            )
+
+                        return@launch
+                    }
                 }
             }
 
@@ -1655,13 +1799,15 @@ fun searchAndAddBook(isbnOrQuery: String) {
 
         if (normalizedBook.isbn.isNotBlank()) {
 
-            val existingByIsbn =
-                bookDao.findByIsbn(
-                    normalizedBook.isbn
-                )
+            for (variant in isbnVariants(normalizedBook.isbn)) {
+                val existingByIsbn =
+                    bookDao.findByIsbn(
+                        variant
+                    )
 
-            if (existingByIsbn != null) {
-                return ImportAction.DUPLICATE
+                if (existingByIsbn != null) {
+                    return ImportAction.DUPLICATE
+                }
             }
         }
 
@@ -2253,6 +2399,11 @@ fun MainScreen(
                 mutableStateOf(false)
             }
 
+    var manualAddInitialIsbn
+            by remember {
+                mutableStateOf("")
+            }
+
     var showScanner
             by remember {
                 mutableStateOf(false)
@@ -2520,6 +2671,25 @@ fun MainScreen(
                     Toast.LENGTH_LONG
                 ).show()
 
+                viewModel.resetState()
+            }
+
+            is UiState.NotFound -> {
+
+                manualAddInitialIsbn =
+                    state.isbn.ifBlank {
+                        cleanIsbn(state.query).takeIf {
+                            isIsbn(it)
+                        }.orEmpty()
+                    }
+
+                Toast.makeText(
+                    context,
+                    "Aucun résultat automatique. Complète les infos du livre.",
+                    Toast.LENGTH_LONG
+                ).show()
+
+                showManualAdd = true
                 viewModel.resetState()
             }
 
@@ -2814,6 +2984,7 @@ fun MainScreen(
                 SmallFloatingActionButton(
 
                     onClick = {
+                        manualAddInitialIsbn = ""
                         showManualAdd = true
                     },
 
@@ -3001,9 +3172,11 @@ fun MainScreen(
     if (showManualAdd) {
 
         ManualAddBookDialog(
+            initialIsbn = manualAddInitialIsbn,
 
             onDismiss = {
                 showManualAdd = false
+                manualAddInitialIsbn = ""
             },
 
             onAdd = {
@@ -3011,6 +3184,7 @@ fun MainScreen(
                 viewModel.addBookDirectly(it)
 
                 showManualAdd = false
+                manualAddInitialIsbn = ""
             }
         )
     }
@@ -3987,9 +4161,15 @@ fun BookDetailDialog(
 
 @Composable
 fun ManualAddBookDialog(
+    initialIsbn: String = "",
     onDismiss: () -> Unit,
     onAdd: (Book) -> Unit
 ) {
+
+    var isbn by
+            remember(initialIsbn) {
+                mutableStateOf(initialIsbn)
+            }
 
     var title by
             remember {
@@ -4036,6 +4216,19 @@ fun ManualAddBookDialog(
                     fontSize = 18.sp,
                     color =
                         AppTheme.TextPrimary
+                )
+
+                OutlinedTextField(
+                    isbn,
+                    {
+                        isbn = it
+                    },
+                    label = {
+                        Text("ISBN")
+                    },
+                    modifier =
+                        Modifier.fillMaxWidth(),
+                    singleLine = true
                 )
 
                 OutlinedTextField(
@@ -4114,6 +4307,7 @@ fun ManualAddBookDialog(
 
                                 onAdd(
                                     Book(
+                                        isbn = cleanIsbn(isbn),
                                         title = title,
                                         authors = author,
                                         series = series,
@@ -4199,8 +4393,7 @@ fun BarcodeScannerDialog(
                                     BarcodeScannerOptions
                                         .Builder()
                                         .setBarcodeFormats(
-                                            Barcode.FORMAT_EAN_13,
-                                            Barcode.FORMAT_EAN_8
+                                            Barcode.FORMAT_EAN_13
                                         )
                                         .build()
                                 )
@@ -4324,7 +4517,10 @@ private fun processImageProxy(
             barcodes.forEach { barcode ->
 
                 barcode.rawValue?.let {
-                    onBarcodeScanned(it)
+                    val isbn = cleanIsbn(it)
+                    if (isIsbn(isbn)) {
+                        onBarcodeScanned(isbn)
+                    }
                 }
             }
         }

@@ -1,8 +1,18 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.google.devtools.ksp") version "1.9.22-1.0.17"
 }
+
+val localProperties =
+    Properties().apply {
+        val file = rootProject.file("local.properties")
+        if (file.exists()) {
+            file.inputStream().use(::load)
+        }
+    }
 
 android {
 
@@ -19,6 +29,12 @@ android {
 
         versionCode = 1
         versionName = "1.0"
+
+        buildConfigField(
+            "String",
+            "GOOGLE_BOOKS_API_KEY",
+            "\"${localProperties.getProperty("GOOGLE_BOOKS_API_KEY", "")}\""
+        )
     }
 
     buildTypes {
@@ -58,6 +74,7 @@ android {
     buildFeatures {
 
         compose = true
+        buildConfig = true
     }
 
     composeOptions {
